@@ -25,9 +25,8 @@ Keep your LLM workspace at `~/projects/dev`, or select any workspace with `--dev
 Set up its agent configuration and CLI authentication on each machine.
 
 Requires Node.js 22 or newer, authenticated `gh`, and the selected `claude` and/or
-`codex` CLIs. There are no npm dependencies. Configure a `reviewer` agent for each
-selected provider in your workspace before running the tool. See
-[reviewer setup](#reviewer-setup) below.
+`codex` CLIs. There are no npm dependencies. Each CLI uses your local configuration
+to select suitable agents and skills.
 
 ## Run from any directory
 
@@ -84,8 +83,8 @@ Invalid JSON, unsupported providers, extra fields, and empty model values fail
 before any CLI is launched.
 
 Supported providers are defined in the code in `lib/providers.mjs`. Each entry
-configures the CLI command, reviewer agent path, prompt instructions, argument
-builder, and output reader. Add an entry there to support another provider.
+configures the CLI command, argument builder, and output reader. Add an entry
+there to support another provider.
 An unlisted provider raises an error naming it and listing the supported providers.
 
 Reverse the objects to run Codex first, or select two models from one provider:
@@ -94,14 +93,11 @@ Reverse the objects to run Codex first, or select two models from one provider:
 PR_REVIEW_REVIEWERS='[{"provider":"claude","model":"opus"},{"provider":"claude","model":"sonnet"}]'
 ```
 
-## Reviewer setup
+## Workspace setup
 
-Only selected providers need an installed CLI and a configured `reviewer` agent:
-`.claude/agents/reviewer.md` for Claude and `.codex/agents/reviewer.toml` for Codex.
-Create and enable these agents using the provider's agent configuration format.
-The reviewer should inspect the requested PR, verify findings against the diff,
-and return its full review without changing code or publishing comments. The tool
-supplies the review protocol and required JSON response schema on each run.
+Install and authenticate each selected provider's CLI. Each CLI selects suitable
+agents using your local configuration. The tool supplies the review protocol and
+required JSON response schema on each run.
 
 Your workspace can contain your own repository instructions, skills, and source
 checkouts. No particular workspace framework or agent synchronization command is
@@ -110,15 +106,14 @@ Each slot has a separate identity and output files even when providers repeat.
 
 ## Review behavior
 
-Claude uses its configured `reviewer` agent in plan mode without interactive
-permission prompts. Codex is instructed to delegate to its configured `reviewer`
-and runs in a read-only sandbox with approvals disabled. Both retain their
-workspace configuration, skills, and authentication. Explicit models are passed
+Claude runs in plan mode without interactive permission prompts. Codex runs in a
+read-only sandbox with approvals disabled. Both retain their workspace
+configuration, skills, and authentication. Explicit models are passed
 through `--model`. Codex also receives the selected model as its default subagent
-model; its prompt requires the delegated reviewer to use that model. A custom
-Codex reviewer file that pins a different model must be updated or have its model
-removed; the prompt requires a blocked verdict instead of substitution in that
-case. Leaving the model unset preserves existing model selection.
+model; the prompt requires any delegated reviewer to use the requested model.
+If a selected agent pins a different model or the requested model is unavailable,
+the prompt requires a blocked verdict. Leaving the model unset preserves existing
+model selection.
 
 The script captures PR metadata, comments, reviews, CI status, and the diff before
 each round. The agents can read those captures without command network access.
@@ -155,8 +150,8 @@ npm test
 Integration tests use fake CLI executables, with this tool and its LLM workspace
 in separate sibling directories. They cover handoffs, disagreement, stale
 approvals, invalid responses, failures, timeouts, interruption, and workspace
-selection, `.env` precedence, report folders, model arguments, reversed reviewer
-order, and two models from the same provider.
+selection without fixed agent files, `.env` precedence, report folders, model
+arguments, reversed reviewer order, and two models from the same provider.
 
 The integrations use [Claude's CLI](https://code.claude.com/docs/en/cli-reference)
 and [Codex non-interactive mode](https://developers.openai.com/codex/noninteractive/).

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -23,7 +23,7 @@ PR_REVIEW_REPORTS_DIR selects reports (default: <dev-dir>/sessions/pr-reviews/).
 PR_REVIEW_REVIEWERS selects two ordered providers with optional models as JSON,
 for example: [{"provider":"claude","model":"opus"},{"provider":"codex"}]
 Supported providers: ${Object.keys(providers).join(", ")}.
-Requires authenticated gh and the selected providers' CLIs and reviewer agents.
+Requires authenticated gh and the selected providers' CLIs.
 Exit codes: 0 = both approve, 2 = no consensus, 1 = error, 130/143 = interrupted.
 This script reviews only; it does not fix, publish reviews, or merge the PR.
 `;
@@ -107,9 +107,6 @@ async function main() {
   const options = optionsFrom(process.argv.slice(2));
   if (options.help) return console.log(help);
   const root = options.root;
-  for (const { adapter, provider } of options.reviewers) {
-    if (!existsSync(join(root, adapter))) throw new Error(`Missing ${adapter}; configure a ${provider} reviewer agent in ${root} first (see README.md)`);
-  }
   const parent = options.reports;
   mkdirSync(parent, { recursive: true });
   const directory = mkdtempSync(join(parent, `${options.label}-`));

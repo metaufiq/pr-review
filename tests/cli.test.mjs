@@ -14,6 +14,7 @@ const changes = { verdict: "request_changes", blockers: ["Required fix"], review
 function runReview(scenario, args = [], options = {}) {
   const temporary = mkdtempSync(join(tmpdir(), "pr-review-test-"));
   const workspace = join(temporary, options.override ? "custom-workspace" : "dev");
+  mkdirSync(workspace);
   const toolRepository = join(temporary, "pr-review");
   const caller = join(temporary, "elsewhere");
   mkdirSync(caller);
@@ -23,10 +24,6 @@ function runReview(scenario, args = [], options = {}) {
   cpSync(join(repository, "lib"), join(toolRepository, "lib"), { recursive: true });
   const paths = { workspace, toolRepository, temporary };
   if (options.dotenv) writeFileSync(join(toolRepository, ".env"), options.dotenv(paths));
-  for (const adapter of options.adapters ?? [".claude/agents/reviewer.md", ".codex/agents/reviewer.toml"]) {
-    mkdirSync(dirname(join(workspace, adapter)), { recursive: true });
-    writeFileSync(join(workspace, adapter), "test reviewer");
-  }
   const fixture = join(bin, "cli.cjs");
   const source = readFileSync(join(here, "fixtures", "cli.cjs"), "utf8");
   writeFileSync(fixture, source.replace("#!/usr/bin/env node", `#!${process.execPath}`));
@@ -57,7 +54,7 @@ function runReview(scenario, args = [], options = {}) {
   }
 }
 
-test("runs configured reviewers from dev and passes Claude's full review through stdin", () => {
+test("runs both CLIs without fixed agents and passes Claude's full review through stdin", () => {
   const fullReview = 'Optional nit: "quote" and $(touch /tmp/do-not-run) are review text';
   const result = runReview({ claude: [{ verdict: "approve_with_nits", review: fullReview }] });
   assert.equal(result.status, 0, result.stderr);
@@ -66,14 +63,13 @@ test("runs configured reviewers from dev and passes Claude's full review through
   assert.ok(result.calls.every((call) => call.cwd === result.workspace));
   const agents = result.calls.filter((call) => call.tool !== "gh");
   assert.deepEqual(agents.map((call) => call.tool), ["claude", "codex"]);
-  assert.ok(agents[0].args.includes("reviewer"));
+  assert.ok(agents.every((call) => !call.args.includes("--agent")));
+  assert.ok(agents.every((call) => !call.input.includes("configured reviewer agent")));
   assert.ok(agents[0].args.includes("plan"));
-  assert.match(agents[0].input, /You are the configured reviewer agent\./);
   assert.ok(agents[1].args.includes("read-only"));
   assert.equal(agents[1].args[agents[1].args.indexOf("--cd") + 1], result.workspace);
   assert.ok(agents.every((call) => call.input.includes(result.workspace)));
   assert.ok(agents[1].input.includes(JSON.stringify(fullReview)));
-  assert.match(agents[1].input, /Delegate the review to the configured reviewer agent/);
   assert.match(agents[1].input, /1-pr\.diff/);
 });
 
@@ -236,12 +232,11 @@ test("exported variables override .env and --dev-dir overrides both", () => {
 });
 
 for (const provider of ["claude", "codex"]) {
-  test(`runs two ${provider} models without requiring the other adapter or overwriting reviews`, () => {
+  test(`runs two ${provider} models without overwriting reviews`, () => {
     const result = runReview({ [provider]: [changes, {}, {}, {}] }, [], {
       environment: () => ({ PR_REVIEW_REVIEWERS: JSON.stringify([
         { provider, model: "model-one" }, { provider, model: "model-two" },
       ]) }),
-      adapters: [provider === "claude" ? ".claude/agents/reviewer.md" : ".codex/agents/reviewer.toml"],
     });
     assert.equal(result.status, 0, result.stderr);
     const agents = result.calls.filter((call) => call.tool !== "gh");
