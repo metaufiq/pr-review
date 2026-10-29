@@ -10,12 +10,21 @@
     "url": "https://github.com/metaufiq/pr-review.git"
   },
   "bin": {
-    "review-pr": "bin/review-pr.mjs"
+    "review-pr": "dist/bin/review-pr.js"
   },
   "scripts": {
-    "test": "node --test"
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "prepare": "husky && npm run build",
+    "review": "npm run build && node dist/bin/review-pr.js",
+    "test": "npm run build && node --test dist/tests/*.test.js"
   },
   "engines": {
     "node": ">=22"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "husky": "^9.1.7",
+    "typescript": "^7.0.2"
   }
 }

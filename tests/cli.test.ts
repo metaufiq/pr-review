@@ -5,13 +5,27 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import type { FixtureState, Scenario, Summary } from "./fixtures/types.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repository = resolve(here, "..");
 const url = "https://github.com/owner/repo/pull/123";
-const changes = { verdict: "request_changes", blockers: ["Required fix"], review: "Do not approve; needs a required fix" };
+const changes = { verdict: "request_changes" as const, blockers: ["Required fix"], review: "Do not approve; needs a required fix" };
 
-function runReview(scenario, args = [], options = {}) {
+interface TestPaths {
+  workspace: string;
+  toolRepository: string;
+  temporary: string;
+}
+
+interface TestOptions {
+  override?: "flag" | "environment" | "dotenv";
+  dotenv?: (paths: TestPaths) => string;
+  environment?: (paths: TestPaths) => NodeJS.ProcessEnv;
+  reports?: (paths: TestPaths) => string;
+}
+
+function runReview(scenario: Scenario, args: string[] = [], options: TestOptions = {}) {
   const temporary = mkdtempSync(join(tmpdir(), "pr-review-test-"));
   const workspace = join(temporary, options.override ? "custom-workspace" : "dev");
   mkdirSync(workspace);
@@ -20,12 +34,13 @@ function runReview(scenario, args = [], options = {}) {
   mkdirSync(caller);
   const bin = join(temporary, "cli-bin");
   mkdirSync(bin);
-  cpSync(join(repository, "bin"), join(toolRepository, "bin"), { recursive: true });
-  cpSync(join(repository, "lib"), join(toolRepository, "lib"), { recursive: true });
+  cpSync(join(repository, "bin"), join(toolRepository, "dist", "bin"), { recursive: true });
+  cpSync(join(repository, "lib"), join(toolRepository, "dist", "lib"), { recursive: true });
+  writeFileSync(join(toolRepository, "package.json"), '{"type":"module"}');
   const paths = { workspace, toolRepository, temporary };
   if (options.dotenv) writeFileSync(join(toolRepository, ".env"), options.dotenv(paths));
-  const fixture = join(bin, "cli.cjs");
-  const source = readFileSync(join(here, "fixtures", "cli.cjs"), "utf8");
+  const fixture = join(bin, "cli.mjs");
+  const source = readFileSync(join(here, "fixtures", "cli.js"), "utf8");
   writeFileSync(fixture, source.replace("#!/usr/bin/env node", `#!${process.execPath}`));
   chmodSync(fixture, 0o755);
   for (const tool of ["gh", "claude", "codex"]) symlinkSync(fixture, join(bin, tool));
@@ -34,7 +49,7 @@ function runReview(scenario, args = [], options = {}) {
   try {
     const workspaceArgs = options.override === "flag" ? ["--dev-dir", workspace] : [];
     const environment = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("PR_REVIEW_")));
-    const result = spawnSync(process.execPath, [join(toolRepository, "bin", "review-pr.mjs"), url, ...workspaceArgs, ...args], {
+    const result = spawnSync(process.execPath, [join(toolRepository, "dist", "bin", "review-pr.js"), url, ...workspaceArgs, ...args], {
       cwd: caller, encoding: "utf8", timeout: 15000,
       env: { ...environment, PATH: `${bin}:${process.env.PATH}`, REVIEW_TEST_STATE: statePath,
         REVIEW_TEST_SCENARIO: JSON.stringify(scenario),
@@ -46,9 +61,11 @@ function runReview(scenario, args = [], options = {}) {
     assert.equal(existsSync(join(toolRepository, "sessions")), false);
     const reports = options.reports ? options.reports(paths) : join(workspace, "sessions", "pr-reviews");
     const directory = existsSync(reports) ? readdirSync(reports)[0] : undefined;
-    return { ...result, workspace: realpathSync(workspace), calls: JSON.parse(readFileSync(statePath, "utf8")).calls,
+    const state: FixtureState = JSON.parse(readFileSync(statePath, "utf8"));
+    const summary: Summary | undefined = directory ? JSON.parse(readFileSync(join(reports, directory, "summary.json"), "utf8")) : undefined;
+    return { ...result, workspace: realpathSync(workspace), calls: state.calls,
       reports, files: directory ? readdirSync(join(reports, directory)) : [],
-      summary: directory ? JSON.parse(readFileSync(join(reports, directory, "summary.json"), "utf8")) : undefined };
+      summary };
   } finally {
     rmSync(temporary, { recursive: true, force: true });
   }
@@ -58,6 +75,7 @@ test("runs both CLIs without fixed agents and passes Claude's full review throug
   const fullReview = 'Optional nit: "quote" and $(touch /tmp/do-not-run) are review text';
   const result = runReview({ claude: [{ verdict: "approve_with_nits", review: fullReview }] });
   assert.equal(result.status, 0, result.stderr);
+  assert.ok(result.summary);
   assert.equal(result.summary.status, "approved");
   assert.equal(result.summary.round, 1);
   assert.ok(result.calls.every((call) => call.cwd === result.workspace));
@@ -73,14 +91,16 @@ test("runs both CLIs without fixed agents and passes Claude's full review throug
   assert.match(agents[1].input, /1-pr\.diff/);
 });
 
-for (const format of ["json", "fenced", "unlabeled"]) {
+for (const format of ["json", "fenced", "unlabeled"] as const) {
   test(`accepts Claude's ${format} JSON result when structured output is absent`, () => {
     const fullReview = 'Optional nit: "quotes", Unicode José, and a newline\nremain intact.';
     const result = runReview({ claudeFormat: format, claude: [{ verdict: "approve_with_nits", review: fullReview }] });
     assert.equal(result.status, 0, result.stderr);
+    assert.ok(result.summary);
     assert.equal(result.summary.status, "approved");
     assert.equal(result.summary.reviews[0].review, fullReview);
     const codex = result.calls.find((call) => call.tool === "codex");
+    assert.ok(codex);
     assert.ok(codex.input.includes(JSON.stringify(fullReview)));
     assert.ok(result.files.includes("1-reviewer-1.review.json"));
   });
@@ -89,18 +109,21 @@ for (const format of ["json", "fenced", "unlabeled"]) {
 test("accepts a JSON result when Claude's structured output is null", () => {
   const result = runReview({ claudeFormat: "json", claudeEnvelope: { structured_output: null } });
   assert.equal(result.status, 0, result.stderr);
+  assert.ok(result.summary);
   assert.equal(result.summary.status, "approved");
 });
 
 test("prefers Claude's structured output over its result text", () => {
   const result = runReview({ claudeEnvelope: { result: "This result text is not JSON" } });
   assert.equal(result.status, 0, result.stderr);
+  assert.ok(result.summary);
   assert.equal(result.summary.status, "approved");
 });
 
 test("feeds Codex's disagreement back to Claude and continues until both approve", () => {
   const result = runReview({ claude: [changes, {}], codex: [{ review: "Claude's finding is disproven at example.js:10" }, {}] });
   assert.equal(result.status, 0, result.stderr);
+  assert.ok(result.summary);
   assert.equal(result.summary.round, 2);
   const claudeCalls = result.calls.filter((call) => call.tool === "claude");
   assert.match(claudeCalls[1].input, /finding is disproven/);
@@ -110,19 +133,22 @@ test("feeds Codex's disagreement back to Claude and continues until both approve
 test("never treats approval words in a blocking review as consensus", () => {
   const result = runReview({ claude: [changes], codex: [changes] }, ["--max-rounds", "2"]);
   assert.equal(result.status, 2, result.stderr);
+  assert.ok(result.summary);
   assert.equal(result.summary.status, "no_consensus");
   assert.equal(result.calls.filter((call) => call.tool === "codex").length, 2);
 });
 
-for (const field of ["headRefOid", "baseRefOid"]) {
+for (const field of ["headRefOid", "baseRefOid"] as const) {
   test(`discards approvals when ${field} changes after Codex and reviews the new revision`, () => {
     const revision = { [field]: "c".repeat(40) };
     const result = runReview({ revisions: [{}, {}, {}, revision] });
     assert.equal(result.status, 0, result.stderr);
+    assert.ok(result.summary);
     assert.equal(result.summary.round, 2);
     assert.equal(result.summary.reviews.length, 2);
     const claudeCalls = result.calls.filter((call) => call.tool === "claude");
     assert.match(claudeCalls[1].input, /either reviewer\):\n\[\]/);
+    assert.ok(result.summary.revision);
     assert.equal(result.summary.revision[field], revision[field]);
   });
 }
@@ -130,11 +156,12 @@ for (const field of ["headRefOid", "baseRefOid"]) {
 test("restarts before invoking Codex if the head changes during Claude's review", () => {
   const result = runReview({ revisions: [{}, {}, { headRefOid: "c".repeat(40) }] });
   assert.equal(result.status, 0, result.stderr);
+  assert.ok(result.summary);
   assert.equal(result.calls.filter((call) => call.tool === "codex").length, 1);
   assert.equal(result.summary.round, 2);
 });
 
-const failures = [
+const failures: [string, Scenario][] = [
   ["malformed Claude output", { malformed: "claude" }],
   ["malformed Codex output", { malformed: "codex" }],
   ["missing Codex final output", { missingAnswer: true }],
@@ -161,6 +188,7 @@ for (const [name, scenario] of failures) {
   test(`fails closed on ${name}`, () => {
     const result = runReview(scenario);
     assert.equal(result.status, 1);
+    assert.ok(result.summary);
     assert.equal(result.summary.status, "error");
     assert.ok(result.summary.error);
   });
@@ -181,13 +209,14 @@ test("interrupts the active reviewer and exits without launching Codex", () => {
 });
 
 test("help and invalid arguments need no CLI authentication", () => {
-  for (const [args, expected] of [[["--help"], 0], [[url, "--max-rounds", "0"], 1], [["not-a-pr"], 1]]) {
-    const result = spawnSync(process.execPath, [join(repository, "bin", "review-pr.mjs"), ...args], { encoding: "utf8" });
+  const cases: [string[], number][] = [[["--help"], 0], [[url, "--max-rounds", "0"], 1], [["not-a-pr"], 1]];
+  for (const [args, expected] of cases) {
+    const result = spawnSync(process.execPath, [join(repository, "bin", "review-pr.js"), ...args], { encoding: "utf8" });
     assert.equal(result.status, expected);
   }
 });
 
-for (const override of ["flag", "environment"]) {
+for (const override of ["flag", "environment"] as const) {
   test(`runs reviewers in the workspace selected by ${override}`, () => {
     const result = runReview({}, [], { override });
     assert.equal(result.status, 0, result.stderr);
@@ -211,6 +240,7 @@ test("loads workspace, reports, reviewer order, and models from the repository .
   assert.ok(agents[0].args.includes('agents.default_subagent_model="codex-test-model"'));
   assert.match(agents[0].input, /including any delegated reviewer/);
   assert.match(agents[1].input, /codex full review/);
+  assert.ok(result.summary);
   assert.equal(result.summary.reviewers[0].model, "codex-test-model");
   assert.equal(result.summary.reviews[1].model, "sonnet");
 });
@@ -231,7 +261,7 @@ test("exported variables override .env and --dev-dir overrides both", () => {
   assert.ok(result.calls.filter((call) => call.tool !== "gh").every((call) => !call.args.includes("--model")));
 });
 
-for (const provider of ["claude", "codex"]) {
+for (const provider of ["claude", "codex"] as const) {
   test(`runs two ${provider} models without overwriting reviews`, () => {
     const result = runReview({ [provider]: [changes, {}, {}, {}] }, [], {
       environment: () => ({ PR_REVIEW_REVIEWERS: JSON.stringify([
@@ -241,6 +271,7 @@ for (const provider of ["claude", "codex"]) {
     assert.equal(result.status, 0, result.stderr);
     const agents = result.calls.filter((call) => call.tool !== "gh");
     assert.deepEqual(agents.map((call) => call.tool), Array(4).fill(provider));
+    assert.ok(result.summary);
     assert.deepEqual(result.summary.reviews.map((review) => review.agent), ["reviewer-1", "reviewer-2", "reviewer-1", "reviewer-2"]);
     assert.match(agents[1].input, /needs a required fix/);
     assert.match(agents[2].input, /full review 2/);
@@ -249,7 +280,8 @@ for (const provider of ["claude", "codex"]) {
   });
 }
 
-for (const [provider, index] of [["gemini", 0], ["gemini", 1], ["__proto__", 0], ["constructor", 0], ["toString", 0]]) {
+const unsupportedProviders: [string, number][] = [["gemini", 0], ["gemini", 1], ["__proto__", 0], ["constructor", 0], ["toString", 0]];
+for (const [provider, index] of unsupportedProviders) {
   test(`rejects unlisted provider ${provider} in slot ${index + 1} before invoking CLIs`, () => {
     const reviewers = [{ provider: "claude" }, { provider: "codex" }];
     reviewers[index].provider = provider;

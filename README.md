@@ -19,21 +19,26 @@ projects/
 mkdir -p "$HOME/projects"
 git clone https://github.com/metaufiq/pr-review.git "$HOME/projects/pr-review"
 cd "$HOME/projects/pr-review"
+npm install
+npm run prepare
 ```
 
 Keep your LLM workspace at `~/projects/dev`, or select any workspace with `--dev-dir`.
 Set up its agent configuration and CLI authentication on each machine.
 
 Requires Node.js 22 or newer, authenticated `gh`, and the selected `claude` and/or
-`codex` CLIs. There are no npm dependencies. Each CLI uses your local configuration
-to select suitable agents and skills.
+`codex` CLIs. `npm install` installs the TypeScript development tools;
+`npm run prepare` installs the Git hooks and compiles the CLI into `dist/`.
+Installation also runs this automatically when npm lifecycle scripts are enabled.
+There are no runtime npm dependencies.
+Each CLI uses your local configuration to select suitable agents and skills.
 
 ## Run from any directory
 
 Add this alias to your shell configuration:
 
 ```sh
-alias review-pr='node "$HOME/projects/pr-review/bin/review-pr.mjs"'
+alias review-pr='node "$HOME/projects/pr-review/dist/bin/review-pr.js"'
 ```
 
 Then run:
@@ -82,7 +87,7 @@ available to your authenticated CLI account.
 Invalid JSON, unsupported providers, extra fields, and empty model values fail
 before any CLI is launched.
 
-Supported providers are defined in the code in `lib/providers.mjs`. Each entry
+Supported providers are defined in the code in `lib/providers.ts`. Each entry
 configures the CLI command, argument builder, and output reader. Add an entry
 there to support another provider.
 An unlisted provider raises an error naming it and listing the supported providers.
@@ -141,13 +146,40 @@ report folder outside version control.
 | 1 | Execution or response error |
 | 130 / 143 | Interrupted / terminated |
 
-## Tests
+## Development
+
+The source and tests use strict TypeScript. Shared types for reviewers, revisions,
+verdicts, and review context are in `lib/types.ts`.
+
+```text
+bin/review-pr.ts      # CLI entry point and review loop
+lib/                 # Configuration, providers, process runner, and protocol
+tests/               # Integration tests and fake CLI fixtures
+dist/                # Generated JavaScript and source maps (ignored by Git)
+.husky/pre-push      # Rebuilds the CLI before every push
+```
+
+The Husky pre-push hook runs `npm run build` before every push and stops the push
+if compilation fails. Compiled files stay in the local `dist/` directory.
+Run `npm run prepare` after cloning if npm lifecycle scripts are disabled.
+
+To rebuild before using the shell alias, check types, or run tests:
 
 ```sh
+npm run build
+npm run typecheck
 npm test
 ```
 
-Integration tests use fake CLI executables, with this tool and its LLM workspace
+You can also build and run directly from this repository:
+
+```sh
+npm run review -- https://github.com/owner/repo/pull/123
+npm run review -- --help
+```
+
+`npm test` builds first, then runs the compiled integration tests with Node's test
+runner. Tests use fake CLI executables, with this tool and its LLM workspace
 in separate sibling directories. They cover handoffs, disagreement, stale
 approvals, invalid responses, failures, timeouts, interruption, and workspace
 selection without fixed agent files, `.env` precedence, report folders, model

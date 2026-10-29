@@ -1,26 +1,31 @@
+import type { Review, ReviewContext, Reviewer, Revision, Verdict } from "./types.js";
+
 export const schema = {
   type: "object",
   additionalProperties: false,
   properties: {
     head_sha: { type: "string" },
     base_sha: { type: "string" },
-    verdict: { type: "string", enum: ["approve", "approve_with_nits", "request_changes", "blocked"] },
+    verdict: { type: "string", enum: ["approve", "approve_with_nits", "request_changes", "blocked"] satisfies Verdict[] },
     review: { type: "string" },
     blockers: { type: "array", items: { type: "string" } },
   },
   required: ["head_sha", "base_sha", "verdict", "review", "blockers"],
 };
 
-export function approved(review) {
+export function approved(review: Review): boolean {
   return ["approve", "approve_with_nits"].includes(review.verdict) && review.blockers.length === 0;
 }
 
-export function parseReview(raw, revision) {
-  const review = JSON.parse(raw);
-  if (!review || Object.keys(review).sort().join() !== [...schema.required].sort().join()) {
+export function parseReview(raw: string, revision: Revision): Review {
+  const parsed: unknown = JSON.parse(raw);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)
+      || Object.keys(parsed).sort().join() !== [...schema.required].sort().join()) {
     throw new Error("Reviewer returned an invalid response shape");
   }
-  if (!schema.properties.verdict.enum.includes(review.verdict) || typeof review.review !== "string" || !review.review.trim()) {
+  const review = parsed as Record<string, unknown>;
+  const verdict = schema.properties.verdict.enum.find((value) => value === review.verdict);
+  if (!verdict || typeof review.review !== "string" || !review.review.trim()) {
     throw new Error("Reviewer returned an invalid verdict or empty review");
   }
   if (!Array.isArray(review.blockers) || review.blockers.some((item) => typeof item !== "string" || !item.trim())) {
@@ -29,14 +34,14 @@ export function parseReview(raw, revision) {
   if (review.head_sha !== revision.headRefOid || review.base_sha !== revision.baseRefOid) {
     throw new Error("Reviewer did not review the requested head and base commits");
   }
-  const needsChanges = ["request_changes", "blocked"].includes(review.verdict);
+  const needsChanges = ["request_changes", "blocked"].includes(verdict);
   if (needsChanges !== (review.blockers.length > 0)) {
     throw new Error("Reviewer verdict contradicts its blockers");
   }
-  return review;
+  return { head_sha: review.head_sha, base_sha: review.base_sha, verdict, review: review.review, blockers: review.blockers };
 }
 
-export function promptFor(reviewer, context) {
+export function promptFor(reviewer: Reviewer, context: ReviewContext): string {
   const opening = context.history.length ? `check the preceding peer review of ${context.url}` : `review ${context.url}`;
   return `${opening}
 

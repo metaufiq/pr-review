@@ -1,4 +1,28 @@
 import { readFileSync } from "node:fs";
+import type { schema as reviewSchema } from "./protocol.js";
+import type { ProviderName } from "./types.js";
+
+interface ProviderArguments {
+  model?: string;
+  root: string;
+  schemaPath: string;
+  answer: string;
+  schema: typeof reviewSchema;
+}
+
+interface Provider {
+  command: string;
+  args: (options: ProviderArguments) => string[];
+  output: (options: { raw: string; answer: string }) => string;
+}
+
+interface ClaudeEnvelope {
+  is_error?: boolean;
+  subtype?: string;
+  result?: unknown;
+  permission_denials?: unknown[];
+  structured_output?: unknown;
+}
 
 export const providers = {
   claude: {
@@ -19,17 +43,21 @@ export const providers = {
     ],
     output: ({ answer }) => readFileSync(answer, "utf8"),
   },
-};
+} satisfies Record<string, Provider>;
 
-export function providerFor(name) {
+export function providerFor(name: string): Provider {
   if (typeof name !== "string" || !Object.hasOwn(providers, name)) {
     throw new Error(`Unsupported reviewer provider ${JSON.stringify(name)}. Supported providers: ${Object.keys(providers).join(", ")}`);
   }
-  return providers[name];
+  return providers[name as ProviderName];
 }
 
-function claudeOutput(raw) {
-  const envelope = JSON.parse(raw);
+function claudeOutput(raw: string): string {
+  const parsed: unknown = JSON.parse(raw);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Claude returned an invalid response envelope");
+  }
+  const envelope = parsed as ClaudeEnvelope;
   if (envelope.is_error || envelope.subtype !== "success") {
     throw new Error(`Claude failed: ${envelope.result ?? envelope.subtype ?? "unknown result"}`);
   }

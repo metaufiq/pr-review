@@ -1,7 +1,15 @@
 import { spawn } from "node:child_process";
 import { closeSync, openSync, readFileSync, writeSync } from "node:fs";
 
-export function run(command, args, options) {
+interface ProcessOptions {
+  cwd: string;
+  log: string;
+  timeoutMs: number;
+  input?: string;
+  progress?: boolean;
+}
+
+export function run(command: string, args: string[], options: ProcessOptions): Promise<string> {
   const output = openSync(`${options.log}.stdout.log`, "w", 0o600);
   const errors = openSync(`${options.log}.stderr.log`, "w", 0o600);
   return new Promise((resolve, reject) => {
@@ -11,20 +19,21 @@ export function run(command, args, options) {
       detached: process.platform !== "win32",
       stdio: ["pipe", "pipe", "pipe"],
     });
-    let failure;
-    let killTimer;
-    const stop = (message, exitCode = 1) => {
+    let failure: Error | undefined;
+    let killTimer: NodeJS.Timeout | undefined;
+    const stop = (message: string, exitCode = 1) => {
       failure ??= Object.assign(new Error(message), { exitCode });
       signal("SIGTERM");
       killTimer ??= setTimeout(() => signal("SIGKILL"), 5000);
     };
-    const signal = (name) => {
+    const signal = (name: NodeJS.Signals) => {
       if (!child.pid) return;
       try {
         if (process.platform === "win32") child.kill(name);
         else process.kill(-child.pid, name);
       } catch (error) {
-        if (error.code !== "ESRCH") failure ??= error;
+        const failureToSignal = error as NodeJS.ErrnoException;
+        if (failureToSignal.code !== "ESRCH") failure ??= failureToSignal;
       }
     };
     const interrupt = () => stop("Interrupted", 130);
@@ -37,7 +46,7 @@ export function run(command, args, options) {
       writeSync(errors, chunk);
       if (options.progress) process.stderr.write(chunk);
     });
-    child.stdin.on("error", (error) => {
+    child.stdin.on("error", (error: NodeJS.ErrnoException) => {
       if (error.code !== "EPIPE") stop(error.message);
     });
     child.on("error", (error) => { failure ??= error; });

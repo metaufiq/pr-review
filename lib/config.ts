@@ -1,9 +1,10 @@
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { loadEnvFile } from "node:process";
-import { providerFor } from "./providers.mjs";
+import { providerFor } from "./providers.js";
+import type { Configuration, ProviderName, Reviewer } from "./types.js";
 
-export function configuration(repository, values) {
+export function configuration(repository: string, values: { "dev-dir"?: string }): Configuration {
   const file = join(repository, ".env");
   if (existsSync(file)) loadEnvFile(file);
   const root = values["dev-dir"] ? resolve(values["dev-dir"])
@@ -16,8 +17,8 @@ export function configuration(repository, values) {
   };
 }
 
-function reviewersFrom(value) {
-  let reviewers;
+function reviewersFrom(value: string | undefined): Reviewer[] {
+  let reviewers: unknown;
   try {
     reviewers = JSON.parse(value ?? '[{"provider":"claude"},{"provider":"codex"}]');
   } catch {
@@ -29,15 +30,16 @@ function reviewersFrom(value) {
   return reviewers.map(reviewerFrom);
 }
 
-function reviewerFrom(reviewer, index) {
-  if (!reviewer || typeof reviewer !== "object" || Array.isArray(reviewer) || typeof reviewer.provider !== "string"
+function reviewerFrom(reviewer: unknown, index: number): Reviewer {
+  if (!reviewer || typeof reviewer !== "object" || Array.isArray(reviewer) || !("provider" in reviewer) || typeof reviewer.provider !== "string"
       || Object.keys(reviewer).some((key) => !["provider", "model"].includes(key))) {
     throw new Error("Each PR_REVIEW_REVIEWERS entry must have a provider and an optional model");
   }
-  if (reviewer.model !== undefined && (typeof reviewer.model !== "string" || !reviewer.model.trim())) {
+  const model = "model" in reviewer ? reviewer.model : undefined;
+  if (model !== undefined && (typeof model !== "string" || !model.trim())) {
     throw new Error("Each reviewer model must be a nonempty string when provided");
   }
-  const { provider, model } = reviewer;
-  providerFor(provider);
+  providerFor(reviewer.provider);
+  const provider = reviewer.provider as ProviderName;
   return { id: `reviewer-${index + 1}`, provider, ...(model === undefined ? {} : { model }) };
 }

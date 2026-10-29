@@ -1,10 +1,11 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { run } from "./process.mjs";
-import { parseReview, promptFor, schema } from "./protocol.mjs";
-import { providerFor } from "./providers.mjs";
+import { run } from "./process.js";
+import { parseReview, promptFor, schema } from "./protocol.js";
+import { providerFor } from "./providers.js";
+import type { ReviewContext, Reviewer, ReviewRecord } from "./types.js";
 
-export async function reviewWith(reviewer, context) {
+export async function reviewWith(reviewer: Reviewer, context: ReviewContext): Promise<ReviewRecord> {
   const { id, provider, model } = reviewer;
   const providerConfig = providerFor(provider);
   const label = `${id} (${provider}${model ? `: ${model}` : ""})`;

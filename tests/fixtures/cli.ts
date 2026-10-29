@@ -1,13 +1,17 @@
 #!/usr/bin/env node
-const { readFileSync, writeFileSync } = require("node:fs");
-const { basename } = require("node:path");
+import { readFileSync, writeFileSync } from "node:fs";
+import { basename } from "node:path";
+import type { FixtureState, Scenario, ToolName } from "./types.js";
 
-const tool = basename(process.argv[1]);
+const tool = basename(process.argv[1]) as ToolName;
 const args = process.argv.slice(2);
 const input = readFileSync(0, "utf8");
-const scenario = JSON.parse(process.env.REVIEW_TEST_SCENARIO);
+if (!process.env.REVIEW_TEST_SCENARIO || !process.env.REVIEW_TEST_STATE) {
+  throw new Error("Missing CLI test scenario or state path");
+}
+const scenario: Scenario = JSON.parse(process.env.REVIEW_TEST_SCENARIO);
 const statePath = process.env.REVIEW_TEST_STATE;
-const state = JSON.parse(readFileSync(statePath, "utf8"));
+const state: FixtureState = JSON.parse(readFileSync(statePath, "utf8"));
 const index = state.calls.filter((call) => call.tool === tool).length;
 state.calls.push({ tool, args, input, cwd: process.cwd() });
 writeFileSync(statePath, JSON.stringify(state));
@@ -32,11 +36,12 @@ if (scenario.interrupt === tool) {
   const configured = scenario[tool] ?? [{}];
   const entry = configured[Math.min(index, configured.length - 1)];
   const commits = input.match(/Review head ([a-f0-9]{40}) against base ([a-f0-9]{40})/);
+  if (!commits) throw new Error("Review prompt did not identify the head and base commits");
   const review = { head_sha: commits[1], base_sha: commits[2], verdict: "approve", blockers: [],
     review: `${tool} full review ${index + 1}: verified`, ...entry };
   const raw = scenario.malformed === tool ? "not JSON" : JSON.stringify(review);
   if (tool === "claude") {
-    const envelope = {
+    const envelope: Record<string, unknown> = {
       subtype: scenario.claudeError ? "error_max_turns" : "success", is_error: !!scenario.claudeError,
       permission_denials: scenario.denied ? [{}] : [], structured_output: review,
     };
