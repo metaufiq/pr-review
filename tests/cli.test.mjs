@@ -68,11 +68,12 @@ test("runs configured reviewers from dev and passes Claude's full review through
   assert.deepEqual(agents.map((call) => call.tool), ["claude", "codex"]);
   assert.ok(agents[0].args.includes("reviewer"));
   assert.ok(agents[0].args.includes("plan"));
+  assert.match(agents[0].input, /You are the configured reviewer agent\./);
   assert.ok(agents[1].args.includes("read-only"));
   assert.equal(agents[1].args[agents[1].args.indexOf("--cd") + 1], result.workspace);
   assert.ok(agents.every((call) => call.input.includes(result.workspace)));
   assert.ok(agents[1].input.includes(JSON.stringify(fullReview)));
-  assert.ok(agents[1].input.includes("configured reviewer agent"));
+  assert.match(agents[1].input, /Delegate the review to the configured reviewer agent/);
   assert.match(agents[1].input, /1-pr\.diff/);
 });
 
@@ -253,9 +254,25 @@ for (const provider of ["claude", "codex"]) {
   });
 }
 
-for (const value of ["invalid", "[]", '[{"provider":"claude"}]', '[{"provider":"gemini"},{"provider":"codex"}]',
+for (const [provider, index] of [["gemini", 0], ["gemini", 1], ["__proto__", 0], ["constructor", 0], ["toString", 0]]) {
+  test(`rejects unlisted provider ${provider} in slot ${index + 1} before invoking CLIs`, () => {
+    const reviewers = [{ provider: "claude" }, { provider: "codex" }];
+    reviewers[index].provider = provider;
+    const result = runReview({}, [], {
+      environment: () => ({ PR_REVIEW_REVIEWERS: JSON.stringify(reviewers) }),
+    });
+    assert.equal(result.status, 1, result.stderr);
+    assert.equal(result.calls.length, 0);
+    assert.equal(result.summary, undefined);
+    assert.ok(result.stderr.includes(`Unsupported reviewer provider ${JSON.stringify(provider)}`));
+    assert.match(result.stderr, /Supported providers: claude, codex/);
+  });
+}
+
+for (const value of ["invalid", "[]", '[{"provider":"claude"}]',
   '[{"provider":"claude","model":" "},{"provider":"codex"}]', '[{"provider":"claude","model":5},{"provider":"codex"}]',
-  '[{"provider":"claude","modle":"opus"},{"provider":"codex"}]', '[null,{"provider":"codex"}]']) {
+  '[{"provider":"claude","modle":"opus"},{"provider":"codex"}]', '[null,{"provider":"codex"}]',
+  '[{"provider":["claude"]},{"provider":"codex"}]', '[{"provider":null},{"provider":"codex"}]']) {
   test(`rejects invalid reviewer configuration before invoking CLIs: ${value}`, () => {
     const result = runReview({}, [], { environment: () => ({ PR_REVIEW_REVIEWERS: value }) });
     assert.equal(result.status, 1, result.stderr);

@@ -83,6 +83,11 @@ available to your authenticated CLI account.
 Invalid JSON, unsupported providers, extra fields, and empty model values fail
 before any CLI is launched.
 
+Supported providers are defined in the code in `lib/providers.mjs`. Each entry
+configures the CLI command, reviewer agent path, prompt instructions, argument
+builder, and output reader. Add an entry there to support another provider.
+An unlisted provider raises an error naming it and listing the supported providers.
+
 Reverse the objects to run Codex first, or select two models from one provider:
 
 ```dotenv

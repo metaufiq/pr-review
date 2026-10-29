@@ -7,6 +7,7 @@ import { run } from "../lib/process.mjs";
 import { configuration } from "../lib/config.mjs";
 import { approved, schema } from "../lib/protocol.mjs";
 import { reviewWith } from "../lib/reviewers.mjs";
+import { providers } from "../lib/providers.mjs";
 
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const help = `Usage: review-pr <https://github.com/owner/repo/pull/123> [options]
@@ -21,7 +22,8 @@ PR_REVIEW_DEV_DIR selects the workspace; --dev-dir takes precedence.
 PR_REVIEW_REPORTS_DIR selects reports (default: <dev-dir>/sessions/pr-reviews/).
 PR_REVIEW_REVIEWERS selects two ordered providers with optional models as JSON,
 for example: [{"provider":"claude","model":"opus"},{"provider":"codex"}]
-Requires authenticated gh and the selected claude/codex CLIs and reviewer agents.
+Supported providers: ${Object.keys(providers).join(", ")}.
+Requires authenticated gh and the selected providers' CLIs and reviewer agents.
 Exit codes: 0 = both approve, 2 = no consensus, 1 = error, 130/143 = interrupted.
 This script reviews only; it does not fix, publish reviews, or merge the PR.
 `;
