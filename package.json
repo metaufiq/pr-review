@@ -1,0 +1,21 @@
+{
+  "name": "pr-review",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Claude and Codex PR review consensus using a separate LLM workspace",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/metaufiq/pr-review.git"
+  },
+  "bin": {
+    "review-pr": "bin/review-pr.mjs"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
