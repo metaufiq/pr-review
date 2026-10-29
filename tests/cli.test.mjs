@@ -76,6 +76,31 @@ test("runs configured reviewers from dev and passes Claude's full review through
   assert.match(agents[1].input, /1-pr\.diff/);
 });
 
+for (const format of ["json", "fenced", "unlabeled"]) {
+  test(`accepts Claude's ${format} JSON result when structured output is absent`, () => {
+    const fullReview = 'Optional nit: "quotes", Unicode José, and a newline\nremain intact.';
+    const result = runReview({ claudeFormat: format, claude: [{ verdict: "approve_with_nits", review: fullReview }] });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.summary.status, "approved");
+    assert.equal(result.summary.reviews[0].review, fullReview);
+    const codex = result.calls.find((call) => call.tool === "codex");
+    assert.ok(codex.input.includes(JSON.stringify(fullReview)));
+    assert.ok(result.files.includes("1-reviewer-1.review.json"));
+  });
+}
+
+test("accepts a JSON result when Claude's structured output is null", () => {
+  const result = runReview({ claudeFormat: "json", claudeEnvelope: { structured_output: null } });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.summary.status, "approved");
+});
+
+test("prefers Claude's structured output over its result text", () => {
+  const result = runReview({ claudeEnvelope: { result: "This result text is not JSON" } });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.summary.status, "approved");
+});
+
 test("feeds Codex's disagreement back to Claude and continues until both approve", () => {
   const result = runReview({ claude: [changes, {}], codex: [{ review: "Claude's finding is disproven at example.js:10" }, {}] });
   assert.equal(result.status, 0, result.stderr);
@@ -118,6 +143,16 @@ const failures = [
   ["missing Codex final output", { missingAnswer: true }],
   ["Claude internal error", { claudeError: true }],
   ["Claude permission denial", { denied: true }],
+  ["missing Claude output", { claudeEnvelope: { structured_output: null } }],
+  ["non-string Claude result", { claudeEnvelope: { structured_output: null, result: {} } }],
+  ["empty Claude result", { claudeEnvelope: { structured_output: null, result: " \n " } }],
+  ["malformed Claude result", { claudeFormat: "json", claudeEnvelope: { result: "not JSON" } }],
+  ["Claude result surrounded by prose", { claudeFormat: "fenced", claudeEnvelope: { result: 'Review follows:\n```json\n{}\n```' } }],
+  ["invalid structured output with a valid JSON result", { claudeFormat: "json", claudeEnvelope: { structured_output: {} } }],
+  ["Claude internal error with a valid JSON result", { claudeFormat: "json", claudeError: true }],
+  ["Claude permission denial with a valid JSON result", { claudeFormat: "json", denied: true }],
+  ["fallback approval with blockers", { claudeFormat: "fenced", claude: [{ blockers: ["Still required"] }] }],
+  ["fallback review of another commit", { claudeFormat: "fenced", claude: [{ head_sha: "d".repeat(40) }] }],
   ["approval with blockers", { claude: [{ blockers: ["Still required"] }] }],
   ["rejection without blockers", { codex: [{ verdict: "request_changes" }] }],
   ["review of another commit", { claude: [{ head_sha: "d".repeat(40) }] }],

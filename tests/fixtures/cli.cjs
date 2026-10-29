@@ -35,9 +35,18 @@ if (scenario.interrupt === tool) {
   const review = { head_sha: commits[1], base_sha: commits[2], verdict: "approve", blockers: [],
     review: `${tool} full review ${index + 1}: verified`, ...entry };
   const raw = scenario.malformed === tool ? "not JSON" : JSON.stringify(review);
-  if (tool === "claude") console.log(scenario.malformed === tool ? raw : JSON.stringify({
-    subtype: scenario.claudeError ? "error_max_turns" : "success", is_error: !!scenario.claudeError,
-    permission_denials: scenario.denied ? [{}] : [], structured_output: review,
-  }));
+  if (tool === "claude") {
+    const envelope = {
+      subtype: scenario.claudeError ? "error_max_turns" : "success", is_error: !!scenario.claudeError,
+      permission_denials: scenario.denied ? [{}] : [], structured_output: review,
+    };
+    if (scenario.claudeFormat) {
+      delete envelope.structured_output;
+      envelope.result = scenario.claudeFormat === "json" ? raw
+        : `\`\`\`${scenario.claudeFormat === "unlabeled" ? "" : "json"}\n${raw}\n\`\`\``;
+      envelope.result = ` \n${envelope.result}\n `;
+    }
+    console.log(scenario.malformed === tool ? raw : JSON.stringify({ ...envelope, ...scenario.claudeEnvelope }));
+  }
   else if (!scenario.missingAnswer) writeFileSync(args[args.indexOf("--output-last-message") + 1], raw);
 }
