@@ -66,7 +66,7 @@ function sameRevision(left: Revision, right: Revision): boolean {
 }
 
 async function snapshot(context: RunContext, label: string, full = false): Promise<Revision> {
-  const fields = "url,state,headRefOid,baseRefOid,headRefName,headRepository"
+  const fields = "url,state,headRefOid,baseRefOid,headRefName,headRepository,headRepositoryOwner"
     + (full ? ",title,body,files,comments,reviews,statusCheckRollup" : "");
   const raw = await github(context, ["pr", "view", context.url, "--json", fields], label);
   const revision: Record<string, unknown> = JSON.parse(raw);
@@ -76,7 +76,17 @@ async function snapshot(context: RunContext, label: string, full = false): Promi
       || typeof baseRefOid !== "string" || !/^[a-f0-9]{40}$/.test(baseRefOid)) {
     throw new Error("GitHub returned invalid head/base commit IDs");
   }
-  const { headRefName, headRepository } = revision;
+  const { headRefName, headRepositoryOwner } = revision;
+  let { headRepository } = revision;
+  // gh can return an empty nameWithOwner even when the head repository exists.
+  if (headRepository && typeof headRepository === "object") {
+    const repository = headRepository as Record<string, unknown>;
+    if ((repository.nameWithOwner === undefined || repository.nameWithOwner === "")
+        && typeof repository.name === "string" && headRepositoryOwner && typeof headRepositoryOwner === "object"
+        && "login" in headRepositoryOwner && typeof headRepositoryOwner.login === "string") {
+      headRepository = { ...repository, nameWithOwner: `${headRepositoryOwner.login}/${repository.name}` };
+    }
+  }
   if (typeof headRefName !== "string" || !headRefName || (headRepository !== null
       && (!headRepository || typeof headRepository !== "object" || !("nameWithOwner" in headRepository)
         || typeof headRepository.nameWithOwner !== "string"))) {

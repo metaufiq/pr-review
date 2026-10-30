@@ -124,6 +124,41 @@ test("runs both CLIs without fixed agents and passes Claude's full review throug
   assert.equal(result.calls.some((call) => call.tool === "git" && call.args[0] === "push"), false);
 });
 
+for (const owner of ["owner", "contributor"]) {
+  test(`resolves an empty head repository nameWithOwner using its owner: ${owner}`, () => {
+    const result = runReview({ revisions: [{
+      headRepository: { name: "repo", nameWithOwner: "" }, headRepositoryOwner: { login: owner },
+    }] });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.summary?.status, "approved");
+    assert.equal(result.summary?.revision?.headRepository?.nameWithOwner, `${owner}/repo`);
+    const clone = result.calls.find((call) => call.tool === "gh" && call.args[1] === "clone");
+    assert.equal(clone?.args[2], `${owner}/repo`);
+    const snapshots = result.calls.filter((call) => call.tool === "gh" && call.args[1] === "view");
+    assert.ok(snapshots.every((call) => call.args[call.args.indexOf("--json") + 1].split(",").includes("headRepositoryOwner")));
+  });
+}
+
+test("normalizes repository metadata before comparing PR revisions", () => {
+  const result = runReview({ revisions: [
+    { headRepository: { name: "repo", nameWithOwner: "" }, headRepositoryOwner: { login: "owner" } },
+    { headRepository: { nameWithOwner: "owner/repo" } },
+  ] });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.summary?.round, 1);
+  assert.equal(result.summary?.reviews.length, 2);
+});
+
+for (const headRepository of [null, { name: "repo", nameWithOwner: "" }]) {
+  test(`rejects an unavailable head repository without cloning: ${JSON.stringify(headRepository)}`, () => {
+    const result = runReview({ revisions: [{ headRepository, headRepositoryOwner: null }] });
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /PR head repository is unavailable/);
+    assert.equal(result.calls.some((call) => call.tool === "gh" && call.args[1] === "clone"), false);
+    assert.equal(result.calls.some((call) => ["claude", "codex"].includes(call.tool)), false);
+  });
+}
+
 for (const format of ["json", "fenced", "unlabeled"] as const) {
   test(`accepts Claude's ${format} JSON result when structured output is absent`, () => {
     const fullReview = 'Optional nit: "quotes", Unicode José, and a newline\nremain intact.';

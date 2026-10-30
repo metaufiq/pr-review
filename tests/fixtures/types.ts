@@ -6,7 +6,10 @@ export type ToolName = "gh" | "claude" | "codex" | "git";
 export interface Scenario {
   claude?: Partial<Review>[];
   codex?: Partial<Review>[];
-  revisions?: Partial<Revision>[];
+  revisions?: (Omit<Partial<Revision>, "headRepository"> & {
+    headRepository?: { nameWithOwner?: string; name?: string } | null;
+    headRepositoryOwner?: { login: string } | null;
+  })[];
   claudeFormat?: "json" | "fenced" | "unlabeled";
   claudeEnvelope?: Record<string, unknown>;
   claudeError?: boolean;
