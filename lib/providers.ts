@@ -45,10 +45,11 @@ export const providers = {
     args: ({ model, root, schemaPath, answer, role, checkout }) => [
       "--ask-for-approval", "never", "exec", "--cd", root, "--sandbox", role === "fix" ? "workspace-write" : "read-only",
       ...(role === "fix" ? ["--add-dir", checkout, "--config", "sandbox_workspace_write.network_access=true"] : []),
-      "--color", "never", "--output-schema", schemaPath, "--output-last-message", answer,
+      "--json", "--color", "never", "--output-schema", schemaPath, "--output-last-message", answer,
       ...(model ? ["--model", model, "--config", `agents.default_subagent_model=${JSON.stringify(model)}`] : []), "-",
     ],
     output: ({ answer }) => readFileSync(answer, "utf8"),
+    progress: codexProgress,
   },
 } satisfies Record<string, Provider>;
 
@@ -87,8 +88,7 @@ function object(value: unknown): Record<string, unknown> | undefined {
 }
 
 function claudeProgress(line: string): string[] {
-  let event: Record<string, unknown> | undefined;
-  try { event = object(JSON.parse(line)); } catch { return []; }
+  const event = progressEvent(line);
   if (!event) return [];
   if (event.type === "system" && event.subtype === "init") return ["Session started."];
   if (event.type === "result") return ["Review response received."];
@@ -97,12 +97,72 @@ function claudeProgress(line: string): string[] {
   return content.flatMap((value: unknown) => {
     const block = object(value);
     if (event.type === "assistant" && block?.type === "tool_use" && typeof block.name === "string") {
-      const name = block.name.replace(/[\x00-\x1f\x7f-\x9f]/g, " ").slice(0, 100);
+      const name = display(block.name).slice(0, 100);
+      const command = object(block.input)?.command;
+      if (block.name === "Bash" && typeof command === "string") return [`Bash: ${display(command)}`];
       return [`Using ${name}.`];
     }
     if (event.type === "user" && block?.type === "tool_result") {
       return [block.is_error ? "Tool reported an error." : "Tool completed."];
     }
     return [];
+  });
+}
+
+function codexProgress(line: string): string[] {
+  const event = progressEvent(line);
+  if (!event) return [];
+  if (event.type === "thread.started") return ["Session started."];
+  if (event.type === "turn.completed") return ["Review response received."];
+  if (event.type === "turn.failed") return [errorMessage("Review failed", object(event.error)?.message)];
+  if (event.type === "error") return [errorMessage("CLI error", event.message)];
+  const started = event.type === "item.started";
+  const completed = event.type === "item.completed";
+  const item = object(event.item);
+  if (!item || (!started && !completed)) return [];
+  if (item.type === "command_execution") {
+    if (started) return [typeof item.command === "string" ? `Command: ${display(item.command)}` : "Running command."];
+    const failed = item.status === "failed" || (typeof item.exit_code === "number" && item.exit_code !== 0);
+    const exit = typeof item.exit_code === "number" ? ` (exit ${item.exit_code})` : "";
+    return [`Command ${failed ? "failed" : "completed"}${exit}.`];
+  }
+  if (item.type === "mcp_tool_call") {
+    if (started) {
+      const name = [item.server, item.tool].filter((value) => typeof value === "string").join(".");
+      return [name ? `Using ${display(name)}.` : "Using tool."];
+    }
+    return [item.status === "failed" || item.error ? "Tool reported an error." : "Tool completed."];
+  }
+  if (item.type === "file_change" && completed) {
+    if (item.status === "failed") return ["File update failed."];
+    const paths = Array.isArray(item.changes) ? item.changes.flatMap((change: unknown) => {
+      const path = object(change)?.path;
+      return typeof path === "string" ? [display(path)] : [];
+    }) : [];
+    return [paths.length ? `Files updated: ${paths.join(", ")}.` : "Files updated."];
+  }
+  if (item.type === "web_search") {
+    if (completed) return ["Web search completed."];
+    return [typeof item.query === "string" ? `Searching web: ${display(item.query)}` : "Searching web."];
+  }
+  if (item.type === "error" && completed) return [errorMessage("Tool error", item.message)];
+  return [];
+}
+
+function progressEvent(line: string): Record<string, unknown> | undefined {
+  try { return object(JSON.parse(line)); } catch { return undefined; }
+}
+
+function errorMessage(label: string, message: unknown): string {
+  return typeof message === "string" ? `${label}: ${display(message)}` : `${label}.`;
+}
+
+// Keep each event on one terminal line without interpreting command control characters.
+function display(value: string): string {
+  return value.replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]/g, (character) => {
+    if (character === "\n") return "\\n";
+    if (character === "\r") return "\\r";
+    if (character === "\t") return "\\t";
+    return `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`;
   });
 }

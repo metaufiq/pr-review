@@ -111,12 +111,25 @@ if (scenario.interrupt === tool) {
       { type: "system", subtype: "init" },
       { type: "assistant", message: { content: [{ type: "tool_use", name: "Read", input: { file_path: "example.js" } }] } },
       { type: "user", message: { content: [{ type: "tool_result", content: "original code" }] } },
+      { type: "assistant", message: { content: [{ type: "tool_use", name: "Bash", input: { command: "git diff --stat" } }] } },
+      { type: "user", message: { content: [{ type: "tool_result", content: "diff summary" }] } },
     ];
     for (const event of events) console.log(JSON.stringify(event));
     if (!scenario.missingClaudeResult) {
       console.log(scenario.malformed === tool ? raw : JSON.stringify({ ...envelope, ...scenario.claudeEnvelope }));
     }
   }
-  else if (!scenario.missingAnswer) writeFileSync(args[args.indexOf("--output-last-message") + 1], raw);
+  else {
+    const events = [
+      { type: "thread.started", thread_id: "test-thread" },
+      { type: "item.completed", item: { type: "reasoning", text: "private reasoning" } },
+      { type: "item.completed", item: { type: "agent_message", text: "agent commentary" } },
+      { type: "item.started", item: { id: "command-1", type: "command_execution", command: "git diff --stat", status: "in_progress" } },
+      { type: "item.completed", item: { id: "command-1", type: "command_execution", command: "git diff --stat", status: "completed", exit_code: 0, aggregated_output: "diff summary" } },
+      { type: "turn.completed", usage: {} },
+    ];
+    for (const event of events) console.log(JSON.stringify(event));
+    if (!scenario.missingAnswer) writeFileSync(args[args.indexOf("--output-last-message") + 1], raw);
+  }
 }
 if (scenario.interrupt !== tool && scenario.hang !== tool) writeFileSync(statePath, JSON.stringify(state));
