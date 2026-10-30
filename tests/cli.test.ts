@@ -116,6 +116,7 @@ test("runs both CLIs without fixed agents and passes Claude's full review throug
   assert.equal(agents[0].args[agents[0].args.indexOf("--output-format") + 1], "stream-json");
   assert.ok(agents[0].args.includes("--verbose"));
   assert.match(result.stderr, /\[Round 1: reviewer-1 \(claude\)\] Session started\./);
+  assert.match(result.stderr, /\[Round 1: reviewer-1 \(claude\)\] Agent: code-reviewer: Review changes/);
   assert.match(result.stderr, /Using Read\./);
   assert.match(result.stderr, /\[Round 1: reviewer-1 \(claude\)\] Bash: git diff --stat/);
   assert.match(result.stderr, /Tool completed\./);
@@ -124,10 +125,11 @@ test("runs both CLIs without fixed agents and passes Claude's full review throug
   assert.ok(agents[1].args.includes("workspace-write"));
   assert.ok(agents[1].args.includes("--json"));
   assert.match(result.stderr, /\[Round 1: reviewer-2 \(codex\)\] Session started\./);
+  assert.match(result.stderr, /\[Round 1: reviewer-2 \(codex\)\] Agent spawn_agent completed: agent-123 \(running\)\./);
   assert.match(result.stderr, /\[Round 1: reviewer-2 \(codex\)\] Command: git diff --stat/);
   assert.match(result.stderr, /\[Round 1: reviewer-2 \(codex\)\] Command completed \(exit 0\)\./);
   assert.match(result.stderr, /\[Round 1: reviewer-2 \(codex\)\] Review response received\./);
-  assert.doesNotMatch(result.stderr, /private reasoning|agent commentary|diff summary|Still running|"type":"(?:thread|item|turn)\./);
+  assert.doesNotMatch(result.stderr, /private reasoning|private delegation prompt|private agent response|agent commentary|diff summary|Still running|"type":"(?:thread|item|turn)\./);
   assert.ok(agents[1].args.includes("sandbox_workspace_write.network_access=true"));
   assert.equal(agents[1].args[agents[1].args.indexOf("--cd") + 1], result.workspace);
   assert.ok(agents.every((call) => call.input.includes(result.workspace)));

@@ -109,6 +109,7 @@ if (scenario.interrupt === tool) {
     }
     const events = scenario.claudeEvents ?? [
       { type: "system", subtype: "init" },
+      { type: "assistant", message: { content: [{ type: "tool_use", name: "Agent", input: { subagent_type: "code-reviewer", description: "Review changes", prompt: "private delegation prompt" } }] } },
       { type: "assistant", message: { content: [{ type: "tool_use", name: "Read", input: { file_path: "example.js" } }] } },
       { type: "user", message: { content: [{ type: "tool_result", content: "original code" }] } },
       { type: "assistant", message: { content: [{ type: "tool_use", name: "Bash", input: { command: "git diff --stat" } }] } },
@@ -122,6 +123,8 @@ if (scenario.interrupt === tool) {
   else {
     const events = [
       { type: "thread.started", thread_id: "test-thread" },
+      { type: "item.started", item: { type: "collab_tool_call", tool: "spawn_agent", receiver_thread_ids: [], status: "in_progress", prompt: "private delegation prompt" } },
+      { type: "item.completed", item: { type: "collab_tool_call", tool: "spawn_agent", receiver_thread_ids: ["agent-123"], agents_states: { "agent-123": { status: "running", message: "private agent response" } }, status: "completed" } },
       { type: "item.completed", item: { type: "reasoning", text: "private reasoning" } },
       { type: "item.completed", item: { type: "agent_message", text: "agent commentary" } },
       { type: "item.started", item: { id: "command-1", type: "command_execution", command: "git diff --stat", status: "in_progress" } },

@@ -178,9 +178,20 @@ periodic heartbeat messages, and agent commentary and reasoning are omitted from
 the live display. Both providers' full event streams are saved in the raw stdout
 logs, and their final structured results determine the review verdicts.
 
+Delegated agents also appear in the live output. Claude's `Agent`/`Task` calls
+show the selected agent type, optional name, task description, and requested model
+override when supplied. Codex's collaboration events show the operation, agent
+thread IDs, and reported states; its event format does not include agent names
+or roles. Only emitted delegation events count as agent activity; the available
+agent list at startup is not evidence that those agents ran. Older CLI versions
+may omit delegation events. Full delegation prompts and agent responses stay in
+the raw logs.
+
 ```text
 [Round 1: reviewer-1 (claude)] Bash: git diff --stat
 [Round 1: reviewer-1 (claude)] Tool completed.
+[Round 1: reviewer-1 (claude)] Agent: code-reviewer: Review changes
+[Round 1: reviewer-2 (codex)] Agent spawn_agent completed: agent-123 (running).
 [Round 1: reviewer-2 (codex)] Command: /bin/zsh -lc 'npm test'
 [Round 1: reviewer-2 (codex)] Command completed (exit 0).
 ```

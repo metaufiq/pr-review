@@ -16,12 +16,15 @@ for (const provider of ["claude", "codex"] as const) {
     const review = { head_sha: "a".repeat(40), base_sha: "b".repeat(40), verdict: "approve", review: "Verified", blockers: [] };
     const command = "printf 'café'\nprintf '%s' '$HOME'";
     const events = provider === "claude" ? [{ type: "assistant", message: { content: [
+      { type: "tool_use", name: "Agent", input: { subagent_type: "security-reviewer", description: "Check authorization", prompt: "do not display agent prompts" } },
       { type: "tool_use", name: "Bash", input: { command, secret: "do not display other tool inputs" } },
       { type: "thinking", thinking: "do not display thinking" },
       { type: "text", text: "do not display commentary" },
     ] } }] : [
       { type: "item.completed", item: { type: "reasoning", text: "do not display thinking" } },
       { type: "item.completed", item: { type: "agent_message", text: "do not display commentary" } },
+      { type: "item.started", item: { type: "collab_tool_call", tool: "spawn_agent", receiver_thread_ids: [], agents_states: {}, status: "in_progress", prompt: "do not display agent prompts" } },
+      { type: "item.completed", item: { type: "collab_tool_call", tool: "spawn_agent", receiver_thread_ids: ["agent-123"], agents_states: { "agent-123": { status: "running", message: "do not display agent messages" } }, status: "completed" } },
       { type: "item.started", item: { type: "command_execution", command, status: "in_progress" } },
       { type: "item.updated", item: { type: "command_execution", command, aggregated_output: "do not display command output" } },
     ];
@@ -64,6 +67,7 @@ for (const provider of ["claude", "codex"] as const) {
     assert.equal(readFileSync(`${log}.stdout.log`, "utf8"), raw);
     assert.deepEqual(JSON.parse(providerFor(provider).output({ raw, answer })), review);
     assert.ok(messages.includes(`[Round 1: reviewer-1 (${provider})] ${provider === "claude" ? "Bash" : "Command"}: printf 'café'\\nprintf '%s' '$HOME'\n`));
+    assert.ok(messages.includes(`[Round 1: reviewer-1 (${provider})] ${provider === "claude" ? "Agent: security-reviewer: Check authorization" : "Agent spawn_agent completed: agent-123 (running)."}\n`));
     assert.match(messages.join(""), /Review response received\./);
     assert.doesNotMatch(messages.join(""), /do not display|structured_output/);
   });
@@ -107,4 +111,32 @@ test("formats provider tool events and errors without displaying narration or te
     const progress = providerFor(provider).progress!;
     for (const line of ["not JSON", "null", "[]", "{}", '{"type":"future_event"}']) assert.deepEqual(progress(line), []);
   }
+});
+
+test("shows delegated agents from Claude Agent/Task calls and Codex collaboration events", () => {
+  const claude = (input: unknown, name = "Agent") => providerFor("claude").progress!(JSON.stringify({
+    type: "assistant", message: { content: [{ type: "tool_use", name, input }] },
+  }));
+  assert.deepEqual(claude({ subagent_type: "code-reviewer", name: "backend", model: "opus", description: "Review changes", prompt: "hidden" }),
+    ["Agent: code-reviewer (backend, requested model: opus): Review changes"]);
+  assert.deepEqual(claude({ subagent_type: "Explore", description: "Find tests" }, "Task"), ["Agent: Explore: Find tests"]);
+  assert.deepEqual(claude({ name: "security", resume: "agent-1" }), ["Agent: security (resume: agent-1)"]);
+  assert.deepEqual(claude({ subagent_type: "reviewer\n\u001b[2J", description: "Check\r\ncode" }), ["Agent: reviewer\\n\\u001b[2J: Check\\r\\ncode"]);
+  assert.deepEqual(claude({ subagent_type: 1, name: " ", model: {}, description: [] }), ["Agent: unspecified"]);
+  assert.deepEqual(claude(null, "Task"), ["Agent: unspecified"]);
+  // The init list names available agents, not agents actually used.
+  assert.deepEqual(providerFor("claude").progress!(JSON.stringify({ type: "system", subtype: "init", agents: ["unused-reviewer"] })), ["Session started."]);
+
+  const codex = (item: unknown, type = "item.completed") => providerFor("codex").progress!(JSON.stringify({ type, item }));
+  assert.deepEqual(codex({ type: "collab_tool_call", tool: "spawn_agent", receiver_thread_ids: [], status: "in_progress", prompt: "hidden" }, "item.started"),
+    ["Agent spawn_agent started."]);
+  assert.deepEqual(codex({ type: "collab_tool_call", tool: "wait", receiver_thread_ids: ["agent-1", "agent-2"], status: "completed",
+    agents_states: { "agent-1": { status: "completed", message: "hidden" }, "agent-2": { status: "errored", message: "hidden" } } }),
+    ["Agent wait completed: agent-1 (completed), agent-2 (errored)."]);
+  assert.deepEqual(codex({ type: "collab_tool_call", tool: "spawn_agent", receiver_thread_ids: [], status: "failed" }), ["Agent spawn_agent failed."]);
+  assert.deepEqual(codex({ type: "collab_tool_call", tool: "send_input", receiver_thread_ids: ["agent-1\n\u001b[2J", 1, null], status: "completed" }),
+    ["Agent send_input completed: agent-1\\n\\u001b[2J."]);
+  assert.deepEqual(codex({ type: "collab_tool_call", tool: null, receiver_thread_ids: {}, agents_states: { "agent-3": { status: "running" } } }),
+    ["Agent call completed: agent-3 (running)."]);
+  assert.deepEqual(codex({ type: "collab_tool_call", tool: "wait", prompt: "hidden" }, "item.updated"), []);
 });

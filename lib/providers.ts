@@ -98,7 +98,18 @@ function claudeProgress(line: string): string[] {
     const block = object(value);
     if (event.type === "assistant" && block?.type === "tool_use" && typeof block.name === "string") {
       const name = display(block.name).slice(0, 100);
-      const command = object(block.input)?.command;
+      const input = object(block.input);
+      if (block.name === "Agent" || block.name === "Task") {
+        const type = textField(input?.subagent_type);
+        const agentName = textField(input?.name);
+        const model = textField(input?.model);
+        const resume = textField(input?.resume);
+        const description = textField(input?.description);
+        const details = [type && agentName ? agentName : undefined, model ? `requested model: ${model}` : undefined,
+          resume ? `resume: ${resume}` : undefined].filter(Boolean);
+        return [`Agent: ${type ?? agentName ?? "unspecified"}${details.length ? ` (${details.join(", ")})` : ""}${description ? `: ${description}` : ""}`];
+      }
+      const command = input?.command;
       if (block.name === "Bash" && typeof command === "string") return [`Bash: ${display(command)}`];
       return [`Using ${name}.`];
     }
@@ -120,6 +131,18 @@ function codexProgress(line: string): string[] {
   const completed = event.type === "item.completed";
   const item = object(event.item);
   if (!item || (!started && !completed)) return [];
+  if (item.type === "collab_tool_call") {
+    const states = object(item.agents_states);
+    const receivers = Array.isArray(item.receiver_thread_ids)
+      ? item.receiver_thread_ids.filter((id): id is string => typeof id === "string" && !!id.trim()) : [];
+    const ids = [...new Set([...receivers, ...Object.keys(states ?? {})])];
+    const agents = ids.map((id) => {
+      const status = textField(object(states?.[id])?.status);
+      return `${display(id)}${status ? ` (${status})` : ""}`;
+    });
+    const status = started ? "started" : item.status === "failed" ? "failed" : "completed";
+    return [`Agent ${textField(item.tool) ?? "call"} ${status}${agents.length ? `: ${agents.join(", ")}` : ""}.`];
+  }
   if (item.type === "command_execution") {
     if (started) return [typeof item.command === "string" ? `Command: ${display(item.command)}` : "Running command."];
     const failed = item.status === "failed" || (typeof item.exit_code === "number" && item.exit_code !== 0);
@@ -155,6 +178,10 @@ function progressEvent(line: string): Record<string, unknown> | undefined {
 
 function errorMessage(label: string, message: unknown): string {
   return typeof message === "string" ? `${label}: ${display(message)}` : `${label}.`;
+}
+
+function textField(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? display(value) : undefined;
 }
 
 // Keep each event on one terminal line without interpreting command control characters.
