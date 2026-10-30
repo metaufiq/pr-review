@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import type { schema as reviewSchema } from "./protocol.js";
-import type { ProviderName } from "./types.js";
+import type { ProviderName, Role } from "./types.js";
 
 interface ProviderArguments {
   model?: string;
@@ -8,6 +8,8 @@ interface ProviderArguments {
   schemaPath: string;
   answer: string;
   schema: typeof reviewSchema;
+  role: Role;
+  checkout: string;
 }
 
 interface Provider {
@@ -27,17 +29,20 @@ interface ClaudeEnvelope {
 export const providers = {
   claude: {
     command: "claude",
-    args: ({ model, schema }) => [
-      "--print", "--permission-mode", "plan", "--permission-prompts", "none",
+    args: ({ model, schema, role, checkout }) => [
+      "--print", "--permission-mode", role === "fix" ? "acceptEdits" : "plan", "--permission-prompts", "none",
       "--output-format", "json", "--json-schema", JSON.stringify(schema),
+      "--add-dir", checkout,
+      ...(role === "fix" ? ["--allowedTools", "Bash"] : []),
       ...(model ? ["--model", model] : []),
     ],
     output: ({ raw }) => claudeOutput(raw),
   },
   codex: {
     command: "codex",
-    args: ({ model, root, schemaPath, answer }) => [
-      "--ask-for-approval", "never", "exec", "--cd", root, "--sandbox", "read-only",
+    args: ({ model, root, schemaPath, answer, role, checkout }) => [
+      "--ask-for-approval", "never", "exec", "--cd", root, "--sandbox", role === "fix" ? "workspace-write" : "read-only",
+      ...(role === "fix" ? ["--add-dir", checkout, "--config", "sandbox_workspace_write.network_access=true"] : []),
       "--color", "never", "--output-schema", schemaPath, "--output-last-message", answer,
       ...(model ? ["--model", model, "--config", `agents.default_subagent_model=${JSON.stringify(model)}`] : []), "-",
     ],

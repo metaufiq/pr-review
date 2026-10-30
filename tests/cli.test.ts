@@ -43,16 +43,40 @@ function runReview(scenario: Scenario, args: string[] = [], options: TestOptions
   const source = readFileSync(join(here, "fixtures", "cli.js"), "utf8");
   writeFileSync(fixture, source.replace("#!/usr/bin/env node", `#!${process.execPath}`));
   chmodSync(fixture, 0o755);
-  for (const tool of ["gh", "claude", "codex"]) symlinkSync(fixture, join(bin, tool));
+  for (const tool of ["gh", "claude", "codex", "git"]) symlinkSync(fixture, join(bin, tool));
   const statePath = join(temporary, "state.json");
   writeFileSync(statePath, '{"calls":[]}');
+  const gitEnvironment: NodeJS.ProcessEnv = {
+    GIT_AUTHOR_NAME: "Review test", GIT_AUTHOR_EMAIL: "review@example.com",
+    GIT_COMMITTER_NAME: "Review test", GIT_COMMITTER_EMAIL: "review@example.com",
+  };
+  const localRepository = join(temporary, "remote.git");
+  const localSource = join(temporary, "original-checkout");
+  const realGit = scenario.realGit ? spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim() : "";
+  function git(args: string[]): string {
+    const result = spawnSync(realGit, args, { encoding: "utf8", env: { ...process.env, ...gitEnvironment,
+      GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  }
+  if (scenario.realGit) {
+    git(["init", "--initial-branch=fixes", localSource]);
+    writeFileSync(join(localSource, "example.js"), "original code\n");
+    git(["-C", localSource, "add", "--all"]);
+    git(["-C", localSource, "commit", "-m", "Initial PR"]);
+    git(["clone", "--bare", localSource, localRepository]);
+    Object.assign(gitEnvironment, { REVIEW_TEST_GIT: realGit, REVIEW_TEST_LOCAL_REPOSITORY: localRepository,
+      REVIEW_TEST_ORIGINAL_CHECKOUT: localSource,
+      REVIEW_TEST_INITIAL_HEAD: git(["-C", localSource, "rev-parse", "HEAD"]),
+      GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" });
+  }
   try {
     const workspaceArgs = options.override === "flag" ? ["--dev-dir", workspace] : [];
     const environment = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("PR_REVIEW_")));
     const result = spawnSync(process.execPath, [join(toolRepository, "dist", "bin", "review-pr.js"), url, ...workspaceArgs, ...args], {
-      cwd: caller, encoding: "utf8", timeout: 15000,
+      cwd: caller, encoding: "utf8", timeout: 20000,
       env: { ...environment, PATH: `${bin}:${process.env.PATH}`, REVIEW_TEST_STATE: statePath,
-        REVIEW_TEST_SCENARIO: JSON.stringify(scenario),
+        REVIEW_TEST_SCENARIO: JSON.stringify(scenario), ...gitEnvironment,
         ...(options.override === "environment" ? { PR_REVIEW_DEV_DIR: workspace } : {}),
         ...(options.override === "flag" ? { PR_REVIEW_DEV_DIR: join(temporary, "wrong-workspace") } : {}),
         ...options.environment?.(paths) },
@@ -65,6 +89,11 @@ function runReview(scenario: Scenario, args: string[] = [], options: TestOptions
     const summary: Summary | undefined = directory ? JSON.parse(readFileSync(join(reports, directory, "summary.json"), "utf8")) : undefined;
     return { ...result, workspace: realpathSync(workspace), calls: state.calls,
       reports, files: directory ? readdirSync(join(reports, directory)) : [],
+      ...(scenario.realGit ? { remoteSource: git(["--git-dir", localRepository, "show", "refs/heads/fixes:example.js"]),
+        remoteFiles: git(["--git-dir", localRepository, "ls-tree", "--name-only", "refs/heads/fixes"]),
+        originalSource: readFileSync(join(localSource, "example.js"), "utf8"),
+        checkoutSource: directory ? readFileSync(join(reports, directory, "checkout", "example.js"), "utf8") : undefined,
+        commitCount: Number(git(["--git-dir", localRepository, "rev-list", "--count", "refs/heads/fixes"])) } : {}),
       summary };
   } finally {
     rmSync(temporary, { recursive: true, force: true });
@@ -78,17 +107,21 @@ test("runs both CLIs without fixed agents and passes Claude's full review throug
   assert.ok(result.summary);
   assert.equal(result.summary.status, "approved");
   assert.equal(result.summary.round, 1);
-  assert.ok(result.calls.every((call) => call.cwd === result.workspace));
-  const agents = result.calls.filter((call) => call.tool !== "gh");
+  assert.ok(result.calls.filter((call) => call.tool !== "git").every((call) => call.cwd === result.workspace));
+  const agents = result.calls.filter((call) => ["claude", "codex"].includes(call.tool));
   assert.deepEqual(agents.map((call) => call.tool), ["claude", "codex"]);
   assert.ok(agents.every((call) => !call.args.includes("--agent")));
   assert.ok(agents.every((call) => !call.input.includes("configured reviewer agent")));
   assert.ok(agents[0].args.includes("plan"));
-  assert.ok(agents[1].args.includes("read-only"));
+  assert.ok(agents[1].args.includes("workspace-write"));
+  assert.ok(agents[1].args.includes("sandbox_workspace_write.network_access=true"));
   assert.equal(agents[1].args[agents[1].args.indexOf("--cd") + 1], result.workspace);
   assert.ok(agents.every((call) => call.input.includes(result.workspace)));
   assert.ok(agents[1].input.includes(JSON.stringify(fullReview)));
   assert.match(agents[1].input, /1-pr\.diff/);
+  assert.match(agents[0].input, /This is a review-only task/);
+  assert.match(agents[1].input, /Do not just review again/);
+  assert.equal(result.calls.some((call) => call.tool === "git" && call.args[0] === "push"), false);
 });
 
 for (const format of ["json", "fenced", "unlabeled"] as const) {
@@ -130,6 +163,125 @@ test("feeds Codex's disagreement back to Claude and continues until both approve
   assert.equal(result.summary.reviews.length, 4);
 });
 
+test("publishes verified fixes to a real Git remote and requires the first LLM to review the updated PR", () => {
+  const result = runReview({ realGit: true, newTestFile: true, claude: [changes, {}], fixes: ["fixed code\n"] });
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(result.summary);
+  assert.equal(result.summary.round, 2);
+  assert.equal(result.remoteSource, "fixed code");
+  assert.equal(result.originalSource, "original code\n");
+  assert.equal(result.commitCount, 2);
+  assert.ok(result.remoteFiles?.split("\n").includes("example.test.js"));
+  const agents = result.calls.filter((call) => ["claude", "codex"].includes(call.tool));
+  assert.deepEqual(agents.map((call) => call.tool), ["claude", "codex", "claude", "codex"]);
+  assert.equal(agents[2].source, "fixed code\n");
+  assert.match(agents[2].input, /codex full review 1/);
+  const reports = result.summary.reviews;
+  assert.deepEqual(reports.map((review) => review.role), ["review", "fix", "review", "fix"]);
+  assert.ok(reports[1].published_sha);
+  assert.notEqual(reports[0].head_sha, reports[2].head_sha);
+  assert.equal(reports[1].published_sha, reports[2].head_sha);
+  assert.equal(result.summary.revision?.headRefOid, reports[2].head_sha);
+  const pushes = result.calls.filter((call) => call.tool === "git" && call.args[0] === "push");
+  assert.equal(pushes.length, 1);
+  assert.deepEqual(pushes[0].args, ["push", "origin", `${reports[1].published_sha}:refs/heads/fixes`]);
+  assert.ok(result.files.includes("1-published.json"));
+});
+
+test("an ordinary push rejects a concurrent Git update and preserves the unpublished fix", () => {
+  const result = runReview({ realGit: true, concurrentPush: true, fixes: ["fixed code\n"] });
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(result.summary?.status, "error");
+  assert.equal(result.remoteSource, "concurrent code");
+  assert.equal(result.checkoutSource, "fixed code\n");
+  assert.equal(result.commitCount, 2);
+  assert.equal(result.calls.filter((call) => call.tool === "claude").length, 1);
+});
+
+test("never approves a newly fixed commit before the first LLM reviews it", () => {
+  const result = runReview({ fixes: ["fixed code\n"] }, ["--max-rounds", "1"]);
+  assert.equal(result.status, 2, result.stderr);
+  assert.ok(result.summary);
+  assert.equal(result.summary.status, "no_consensus");
+  assert.equal(result.summary.revision?.headRefOid, result.summary.reviews[1].published_sha);
+});
+
+test("repeats the fix and review cycle when the first LLM finds another required fix", () => {
+  const result = runReview({ claude: [changes, changes, {}], fixes: ["first fix", "second fix"] });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.summary?.round, 3);
+  assert.equal(result.calls.filter((call) => call.tool === "git" && call.args[0] === "push").length, 2);
+  const reviews = result.calls.filter((call) => call.tool === "claude");
+  assert.equal(reviews[1].source, "first fix");
+  assert.equal(reviews[2].source, "second fix");
+});
+
+test("supports fixes with the providers reversed and reports outside the workspace", () => {
+  const result = runReview({ codex: [changes, {}], fixes: ["fixed code"] }, [], {
+    environment: ({ temporary }) => ({ PR_REVIEW_REVIEWERS: '[{"provider":"codex"},{"provider":"claude"}]',
+      PR_REVIEW_REPORTS_DIR: join(temporary, "outside-reports") }),
+    reports: ({ temporary }) => join(temporary, "outside-reports"),
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.summary?.round, 2);
+  const implementer = result.calls.find((call) => call.tool === "claude");
+  assert.ok(implementer);
+  assert.ok(implementer.args.includes("acceptEdits"));
+  const checkout = implementer.args[implementer.args.indexOf("--add-dir") + 1];
+  assert.ok(checkout.startsWith(result.reports));
+});
+
+test("does not push partial fixes when the implementer remains blocked", () => {
+  const result = runReview({ codex: [{ verdict: "blocked", blockers: ["Tests unavailable"] }], fixes: ["partial fix"] });
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /Fixes are not ready to publish/);
+  assert.equal(result.calls.some((call) => call.tool === "git" && call.args[0] === "push"), false);
+});
+
+test("preserves unpublished fixes when the PR changes during implementation", () => {
+  const result = runReview({ fixes: ["local fix"], revisions: [{}, {}, {}, {}, { headRefOid: "c".repeat(40) }] });
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /PR changed during fixes; unpublished work is preserved/);
+  assert.equal(result.calls.some((call) => call.tool === "git" && call.args[0] === "push"), false);
+});
+
+test("rechecks the PR after committing and refuses to push against a changed revision", () => {
+  const result = runReview({ fixes: ["local fix"], revisions: [{}, {}, {}, {}, {}, { baseRefOid: "c".repeat(40) }] });
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /PR changed before publishing fixes; unpublished commit is preserved/);
+  assert.equal(result.calls.some((call) => call.tool === "git" && call.args[0] === "commit"), true);
+  assert.equal(result.calls.some((call) => call.tool === "git" && call.args[0] === "push"), false);
+});
+
+test("does not approve when GitHub's head does not match the pushed fix commit", () => {
+  const result = runReview({ fixes: ["local fix"], revisions: [{}, {}, {}, {}, {}, {}, { headRefOid: "a".repeat(40) }] });
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /PR head does not match the published fix commit/);
+});
+
+for (const command of ["commit", "push"]) {
+  test(`records a ${command} failure without reporting success`, () => {
+    const result = runReview({ fixes: ["local fix"], gitFailure: command });
+    assert.equal(result.status, 1, result.stderr);
+    assert.equal(result.summary?.status, "error");
+    assert.equal(result.calls.filter((call) => call.tool === "claude").length, 1);
+  });
+}
+
+test("refuses to publish if an agent commits or switches checkout HEAD itself", () => {
+  const result = runReview({ changeHead: true });
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /Agent changed checkout HEAD/);
+  assert.equal(result.calls.some((call) => call.tool === "git" && call.args[0] === "push"), false);
+});
+
+test("refuses edits made by the first LLM during a read-only review", () => {
+  const result = runReview({ reviewEdits: true });
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /first LLM modified files/);
+  assert.equal(result.calls.some((call) => call.tool === "codex"), false);
+});
+
 test("never treats approval words in a blocking review as consensus", () => {
   const result = runReview({ claude: [changes], codex: [changes] }, ["--max-rounds", "2"]);
   assert.equal(result.status, 2, result.stderr);
@@ -138,23 +290,52 @@ test("never treats approval words in a blocking review as consensus", () => {
   assert.equal(result.calls.filter((call) => call.tool === "codex").length, 2);
 });
 
+const roundLimits = [
+  { name: "the repository .env", dotenv: "2", expected: 2 },
+  { name: "exported variables over .env", dotenv: "1", exported: "2", expected: 2 },
+  { name: "--max-rounds over exported variables and .env", dotenv: "1", exported: "2", flag: "3", expected: 3 },
+  { name: "the default when unset", expected: 5 },
+];
+for (const { name, dotenv, exported, flag, expected } of roundLimits) {
+  test(`uses the round limit from ${name}`, () => {
+    const result = runReview({ claude: [changes], codex: [changes] }, flag ? ["--max-rounds", flag] : [], {
+      ...(dotenv === undefined ? {} : { dotenv: () => `PR_REVIEW_MAX_ROUNDS=${dotenv}\n` }),
+      ...(exported === undefined ? {} : { environment: () => ({ PR_REVIEW_MAX_ROUNDS: exported }) }),
+    });
+    assert.equal(result.status, 2, result.stderr);
+    assert.equal(result.summary?.round, expected);
+    assert.equal(result.calls.filter((call) => call.tool === "claude").length, expected);
+    assert.equal(result.calls.filter((call) => call.tool === "codex").length, expected);
+  });
+}
+
+for (const value of ["0", "-1", "1.5", "invalid", "", "9007199254740992"]) {
+  test(`rejects invalid PR_REVIEW_MAX_ROUNDS before invoking CLIs: ${JSON.stringify(value)}`, () => {
+    const result = runReview({}, [], { dotenv: () => `PR_REVIEW_MAX_ROUNDS=${value}\n` });
+    assert.equal(result.status, 1, result.stderr);
+    assert.equal(result.calls.length, 0);
+    assert.match(result.stderr, /Expected an integer/);
+  });
+}
+
 for (const field of ["headRefOid", "baseRefOid"] as const) {
   test(`discards approvals when ${field} changes after Codex and reviews the new revision`, () => {
     const revision = { [field]: "c".repeat(40) };
-    const result = runReview({ revisions: [{}, {}, {}, revision] });
+    const result = runReview({ revisions: [{}, {}, {}, {}, revision] });
     assert.equal(result.status, 0, result.stderr);
     assert.ok(result.summary);
     assert.equal(result.summary.round, 2);
-    assert.equal(result.summary.reviews.length, 2);
+    assert.equal(result.summary.reviews.length, 4);
     const claudeCalls = result.calls.filter((call) => call.tool === "claude");
-    assert.match(claudeCalls[1].input, /either reviewer\):\n\[\]/);
+    assert.match(claudeCalls[1].input, /older commits are context, never approval/);
+    assert.match(claudeCalls[1].input, /claude full review 1/);
     assert.ok(result.summary.revision);
     assert.equal(result.summary.revision[field], revision[field]);
   });
 }
 
 test("restarts before invoking Codex if the head changes during Claude's review", () => {
-  const result = runReview({ revisions: [{}, {}, { headRefOid: "c".repeat(40) }] });
+  const result = runReview({ revisions: [{}, {}, {}, { headRefOid: "c".repeat(40) }] });
   assert.equal(result.status, 0, result.stderr);
   assert.ok(result.summary);
   assert.equal(result.calls.filter((call) => call.tool === "codex").length, 1);
@@ -220,7 +401,7 @@ for (const override of ["flag", "environment"] as const) {
   test(`runs reviewers in the workspace selected by ${override}`, () => {
     const result = runReview({}, [], { override });
     assert.equal(result.status, 0, result.stderr);
-    assert.ok(result.calls.every((call) => call.cwd === result.workspace));
+    assert.ok(result.calls.filter((call) => call.tool !== "git").every((call) => call.cwd === result.workspace));
     assert.match(result.workspace, /custom-workspace$/);
   });
 }
@@ -233,13 +414,16 @@ test("loads workspace, reports, reviewer order, and models from the repository .
     reports: ({ temporary }) => join(temporary, "review-reports"),
   });
   assert.equal(result.status, 0, result.stderr);
-  assert.ok(result.calls.every((call) => call.cwd === result.workspace));
-  const agents = result.calls.filter((call) => call.tool !== "gh");
+  assert.ok(result.calls.filter((call) => call.tool !== "git").every((call) => call.cwd === result.workspace));
+  const agents = result.calls.filter((call) => ["claude", "codex"].includes(call.tool));
   assert.deepEqual(agents.map((call) => call.tool), ["codex", "claude"]);
   assert.deepEqual(agents.map((call) => call.args[call.args.indexOf("--model") + 1]), reviewers.map((reviewer) => reviewer.model));
   assert.ok(agents[0].args.includes('agents.default_subagent_model="codex-test-model"'));
-  assert.match(agents[0].input, /including any delegated reviewer/);
+  assert.match(agents[0].input, /including any delegated agent/);
   assert.match(agents[1].input, /codex full review/);
+  assert.ok(agents[0].args.includes("read-only"));
+  assert.ok(agents[1].args.includes("acceptEdits"));
+  assert.ok(agents[1].args.includes("Bash"));
   assert.ok(result.summary);
   assert.equal(result.summary.reviewers[0].model, "codex-test-model");
   assert.equal(result.summary.reviews[1].model, "sonnet");
@@ -257,19 +441,19 @@ test("exported variables override .env and --dev-dir overrides both", () => {
     reports: ({ temporary }) => join(temporary, "exported-reports"),
   });
   assert.equal(result.status, 0, result.stderr);
-  assert.ok(result.calls.every((call) => call.cwd === result.workspace));
-  assert.ok(result.calls.filter((call) => call.tool !== "gh").every((call) => !call.args.includes("--model")));
+  assert.ok(result.calls.filter((call) => call.tool !== "git").every((call) => call.cwd === result.workspace));
+  assert.ok(result.calls.filter((call) => ["claude", "codex"].includes(call.tool)).every((call) => !call.args.includes("--model")));
 });
 
 for (const provider of ["claude", "codex"] as const) {
   test(`runs two ${provider} models without overwriting reviews`, () => {
-    const result = runReview({ [provider]: [changes, {}, {}, {}] }, [], {
+    const result = runReview({ [provider]: [changes, {}, {}, {}], fixes: ["fixed code"] }, [], {
       environment: () => ({ PR_REVIEW_REVIEWERS: JSON.stringify([
         { provider, model: "model-one" }, { provider, model: "model-two" },
       ]) }),
     });
     assert.equal(result.status, 0, result.stderr);
-    const agents = result.calls.filter((call) => call.tool !== "gh");
+    const agents = result.calls.filter((call) => ["claude", "codex"].includes(call.tool));
     assert.deepEqual(agents.map((call) => call.tool), Array(4).fill(provider));
     assert.ok(result.summary);
     assert.deepEqual(result.summary.reviews.map((review) => review.agent), ["reviewer-1", "reviewer-2", "reviewer-1", "reviewer-2"]);

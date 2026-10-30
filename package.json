@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Claude and Codex PR review consensus using a separate LLM workspace",
+  "description": "Configurable LLM PR review and fix loop using a separate workspace",
   "license": "MIT",
   "repository": {
     "type": "git",

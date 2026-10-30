@@ -13,8 +13,9 @@ export async function reviewWith(reviewer: Reviewer, context: ReviewContext): Pr
   const prompt = promptFor(reviewer, context);
   writeFileSync(`${prefix}.prompt.txt`, prompt, { mode: 0o600 });
   const answer = `${prefix}.answer.json`;
-  const args = providerConfig.args({ model, root: context.root, schemaPath: context.schemaPath, answer, schema });
-  console.log(`Round ${context.round}: ${label} is reviewing...`);
+  const args = providerConfig.args({ model, root: context.root, schemaPath: context.schemaPath, answer, schema,
+    role: context.role, checkout: context.checkout });
+  console.log(`Round ${context.round}: ${label} is ${context.role === "fix" ? "checking the review and fixing code" : "reviewing the PR"}...`);
   const raw = await run(providerConfig.command, args, {
     cwd: context.root, input: prompt, timeoutMs: context.timeoutMs, log: prefix, progress: true,
   });
@@ -22,5 +23,5 @@ export async function reviewWith(reviewer: Reviewer, context: ReviewContext): Pr
   const review = parseReview(result, context.revision);
   writeFileSync(`${prefix}.review.json`, JSON.stringify(review, null, 2), { mode: 0o600 });
   console.log(`${label}: ${review.verdict}\n${review.review}\n`);
-  return { agent: id, provider, ...(model ? { model } : {}), round: context.round, ...review };
+  return { agent: id, provider, ...(model ? { model } : {}), round: context.round, role: context.role, ...review };
 }

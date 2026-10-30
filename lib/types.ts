@@ -2,6 +2,7 @@ import type { providers } from "./providers.js";
 
 export type ProviderName = keyof typeof providers;
 export type Verdict = "approve" | "approve_with_nits" | "request_changes" | "blocked";
+export type Role = "review" | "fix";
 
 export interface Reviewer {
   id: string;
@@ -19,6 +20,8 @@ export interface Revision {
   headRefOid: string;
   baseRefOid: string;
   state: string;
+  headRefName: string;
+  headRepository: { nameWithOwner: string } | null;
 }
 
 export interface Review {
@@ -34,6 +37,8 @@ export interface ReviewRecord extends Review {
   provider: ProviderName;
   model?: string;
   round: number;
+  role: Role;
+  published_sha?: string;
 }
 
 export interface ReviewOptions extends Configuration {
@@ -49,10 +54,13 @@ export interface RunContext extends ReviewOptions {
   history: ReviewRecord[];
   round: number;
   revision?: Revision;
+  checkout: string;
+  checkoutRepository?: string;
 }
 
 export interface ReviewContext extends RunContext {
   revision: Revision;
   metadata: string;
   patch: string;
+  role: Role;
 }
