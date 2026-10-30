@@ -1,12 +1,17 @@
 import { spawn } from "node:child_process";
 import { closeSync, openSync, readFileSync, writeSync } from "node:fs";
+import { createInterface } from "node:readline";
 
 interface ProcessOptions {
   cwd: string;
   log: string;
   timeoutMs: number;
   input?: string;
-  progress?: boolean;
+  progress?: {
+    label: string;
+    formatLine?: (line: string) => string[];
+    intervalMs?: number;
+  };
 }
 
 export function run(command: string, args: string[], options: ProcessOptions): Promise<string> {
@@ -41,8 +46,23 @@ export function run(command: string, args: string[], options: ProcessOptions): P
     process.once("SIGINT", interrupt);
     process.once("SIGTERM", terminate);
     const timer = setTimeout(() => stop(`${command} timed out`), options.timeoutMs);
-    child.stdout.on("data", (chunk) => writeSync(output, chunk));
+    const started = Date.now();
+    let lastOutput = started;
+    const report = (message: string) => process.stderr.write(`[${options.progress!.label}] ${message}\n`);
+    const heartbeat = options.progress && setInterval(() => {
+      const now = Date.now();
+      report(`Still running; elapsed ${duration(now - started)}; last output ${duration(now - lastOutput)} ago; timeout in ${duration(Math.max(0, options.timeoutMs - (now - started)))}.`);
+    }, options.progress.intervalMs ?? 30000);
+    const lines = options.progress?.formatLine ? createInterface({ input: child.stdout, crlfDelay: Infinity }) : undefined;
+    lines?.on("line", (line) => {
+      for (const message of options.progress!.formatLine!(line)) report(message);
+    });
+    child.stdout.on("data", (chunk) => {
+      lastOutput = Date.now();
+      writeSync(output, chunk);
+    });
     child.stderr.on("data", (chunk) => {
+      lastOutput = Date.now();
       writeSync(errors, chunk);
       if (options.progress) process.stderr.write(chunk);
     });
@@ -54,6 +74,8 @@ export function run(command: string, args: string[], options: ProcessOptions): P
       if (failure) signal("SIGKILL");
       clearTimeout(timer);
       clearTimeout(killTimer);
+      clearInterval(heartbeat);
+      lines?.close();
       process.removeListener("SIGINT", interrupt);
       process.removeListener("SIGTERM", terminate);
       closeSync(output);
@@ -64,4 +86,9 @@ export function run(command: string, args: string[], options: ProcessOptions): P
     });
     child.stdin.end(options.input ?? "");
   });
+}
+
+function duration(milliseconds: number): string {
+  const seconds = Math.floor(milliseconds / 1000);
+  return seconds >= 60 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${seconds}s`;
 }

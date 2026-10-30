@@ -17,7 +17,8 @@ export async function reviewWith(reviewer: Reviewer, context: ReviewContext): Pr
     role: context.role, checkout: context.checkout });
   console.log(`Round ${context.round}: ${label} is ${context.role === "fix" ? "checking the review and fixing code" : "reviewing the PR"}...`);
   const raw = await run(providerConfig.command, args, {
-    cwd: context.root, input: prompt, timeoutMs: context.timeoutMs, log: prefix, progress: true,
+    cwd: context.root, input: prompt, timeoutMs: context.timeoutMs, log: prefix,
+    progress: { label: `Round ${context.round}: ${label}`, formatLine: providerConfig.progress },
   });
   const result = providerConfig.output({ raw, answer });
   const review = parseReview(result, context.revision);

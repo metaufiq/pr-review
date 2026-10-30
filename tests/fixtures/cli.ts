@@ -98,7 +98,7 @@ if (scenario.interrupt === tool) {
   const raw = scenario.malformed === tool ? "not JSON" : JSON.stringify(review);
   if (tool === "claude") {
     const envelope: Record<string, unknown> = {
-      subtype: scenario.claudeError ? "error_max_turns" : "success", is_error: !!scenario.claudeError,
+      type: "result", subtype: scenario.claudeError ? "error_max_turns" : "success", is_error: !!scenario.claudeError,
       permission_denials: scenario.denied ? [{}] : [], structured_output: review,
     };
     if (scenario.claudeFormat) {
@@ -107,7 +107,15 @@ if (scenario.interrupt === tool) {
         : `\`\`\`${scenario.claudeFormat === "unlabeled" ? "" : "json"}\n${raw}\n\`\`\``;
       envelope.result = ` \n${envelope.result}\n `;
     }
-    console.log(scenario.malformed === tool ? raw : JSON.stringify({ ...envelope, ...scenario.claudeEnvelope }));
+    const events = scenario.claudeEvents ?? [
+      { type: "system", subtype: "init" },
+      { type: "assistant", message: { content: [{ type: "tool_use", name: "Read", input: { file_path: "example.js" } }] } },
+      { type: "user", message: { content: [{ type: "tool_result", content: "original code" }] } },
+    ];
+    for (const event of events) console.log(JSON.stringify(event));
+    if (!scenario.missingClaudeResult) {
+      console.log(scenario.malformed === tool ? raw : JSON.stringify({ ...envelope, ...scenario.claudeEnvelope }));
+    }
   }
   else if (!scenario.missingAnswer) writeFileSync(args[args.indexOf("--output-last-message") + 1], raw);
 }

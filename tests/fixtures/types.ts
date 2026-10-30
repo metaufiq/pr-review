@@ -12,6 +12,8 @@ export interface Scenario {
   })[];
   claudeFormat?: "json" | "fenced" | "unlabeled";
   claudeEnvelope?: Record<string, unknown>;
+  claudeEvents?: unknown[];
+  missingClaudeResult?: boolean;
   claudeError?: boolean;
   denied?: boolean;
   malformed?: ToolName;

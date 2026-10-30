@@ -165,6 +165,14 @@ The default limit is five rounds, configurable with `PR_REVIEW_MAX_ROUNDS` in
 authorizes committing and pushing required fixes to the supplied PR. GitHub review
 publication and merging remain manual.
 
+The terminal shows Claude's session startup and tool activity as they arrive;
+Codex's CLI progress is also displayed. Every 30 seconds, a heartbeat identifies
+the current round and reviewer, elapsed time, time since the last CLI output, and
+time remaining before timeout. The heartbeat confirms the runner is waiting for
+the CLI; it does not guarantee that the agent is making progress. Full Claude
+stream events are saved in the raw stdout log, and the final structured result
+still determines the review verdict.
+
 Prompts, captures, raw CLI logs, full reviews, and `summary.json` are saved under
 `PR_REVIEW_REPORTS_DIR`, or `<dev-dir>/sessions/pr-reviews/` by default. Summaries
 identify each slot, provider, requested model, role, and any published fix commit.
