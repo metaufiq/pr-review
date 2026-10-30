@@ -149,6 +149,10 @@ Each round runs these steps:
    and pushes them to the PR's head branch using an ordinary push.
 4. After a push, a new round starts so the first LLM can review the updated PR.
 
+If GitHub still reports the unchanged pre-push revision, the tool retries the
+post-push check up to four times, one second apart. Each attempt has its own log.
+A different revision or a mismatch after all five checks stops the run.
+
 The agents leave Git operations to the script. Partial fixes with unresolved
 blockers, concurrent PR changes during edits, and commit or push failures stop the
 run and preserve the checkout for inspection. Prior review and fix reports are

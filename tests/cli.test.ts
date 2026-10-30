@@ -302,10 +302,44 @@ test("rechecks the PR after committing and refuses to push against a changed rev
   assert.equal(result.calls.some((call) => call.tool === "git" && call.args[0] === "push"), false);
 });
 
-test("does not approve when GitHub's head does not match the pushed fix commit", () => {
+test("retries stale GitHub heads after a push before reviewing the published fix", () => {
+  const result = runReview({ fixes: ["fixed code"], revisions: [
+    {}, {}, {}, {}, {}, {}, { headRefOid: "a".repeat(40) }, { headRefOid: "a".repeat(40) }, {},
+  ] });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.summary?.status, "approved");
+  assert.equal(result.summary.round, 2);
+  assert.equal(result.summary.reviews[2].head_sha, result.summary.reviews[1].published_sha);
+  assert.equal(result.calls.filter((call) => call.tool === "git" && call.args[0] === "push").length, 1);
+  assert.equal(result.stdout.match(/retrying in 1 second/g)?.length, 2);
+  assert.ok(result.files.includes("1-after-push.stdout.log"));
+  assert.ok(result.files.includes("1-after-push-2.stdout.log"));
+  assert.ok(result.files.includes("1-after-push-3.stdout.log"));
+  assert.equal(result.files.includes("1-after-push-4.stdout.log"), false);
+});
+
+test("stops after bounded retries when GitHub keeps reporting the pre-push head", () => {
   const result = runReview({ fixes: ["local fix"], revisions: [{}, {}, {}, {}, {}, {}, { headRefOid: "a".repeat(40) }] });
   assert.equal(result.status, 1, result.stderr);
   assert.match(result.stderr, /PR head does not match the published fix commit/);
+  assert.equal(result.summary?.status, "error");
+  assert.equal(result.summary.revision?.headRefOid, "a".repeat(40));
+  assert.equal(result.calls.filter((call) => call.tool === "gh" && call.args[1] === "view").length, 11);
+  assert.equal(result.calls.filter((call) => ["claude", "codex"].includes(call.tool)).length, 2);
+  assert.equal(result.stdout.match(/retrying in 1 second/g)?.length, 4);
+  assert.ok(result.files.includes("1-published.json"));
+  assert.ok(result.files.includes("1-after-push-5.stdout.log"));
+  assert.equal(result.files.includes("1-after-push-6.stdout.log"), false);
+});
+
+test("stops immediately when GitHub reports a different head after publishing fixes", () => {
+  const result = runReview({ fixes: ["local fix"], revisions: [{}, {}, {}, {}, {}, {}, { headRefOid: "c".repeat(40) }] });
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /PR head does not match the published fix commit/);
+  assert.equal(result.summary?.revision?.headRefOid, "c".repeat(40));
+  assert.equal(result.calls.filter((call) => call.tool === "gh" && call.args[1] === "view").length, 7);
+  assert.doesNotMatch(result.stdout, /retrying in 1 second/);
+  assert.equal(result.files.includes("1-after-push-2.stdout.log"), false);
 });
 
 for (const command of ["commit", "push"]) {

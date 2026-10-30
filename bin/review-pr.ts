@@ -2,6 +2,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { run } from "../lib/process.js";
 import { configuration } from "../lib/config.js";
@@ -101,6 +102,18 @@ function github(context: RunContext, args: string[], label: string): Promise<str
     log: join(context.directory, `${context.round}-${label}`) });
 }
 
+async function confirmPublishedFix(context: RunContext, previous: Revision, commit: string): Promise<void> {
+  const attempts = 5;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    context.revision = await snapshot(context, attempt === 1 ? "after-push" : `after-push-${attempt}`);
+    if (context.revision.headRefOid === commit) return;
+    if (!sameRevision(previous, context.revision) || attempt === attempts) break;
+    console.log(`GitHub still reports the previous PR revision after push; retrying in 1 second (${attempt}/${attempts - 1}).`);
+    await delay(1000);
+  }
+  throw new Error("PR head does not match the published fix commit; rerun against the latest PR revision");
+}
+
 async function roundOfReviews(context: RunContext): Promise<boolean> {
   const revision = await snapshot(context, "before", true);
   context.revision = revision;
@@ -136,10 +149,7 @@ async function roundOfReviews(context: RunContext): Promise<boolean> {
       }
     });
     writeFileSync(join(context.directory, `${context.round}-published.json`), JSON.stringify(implementation, null, 2), { mode: 0o600 });
-    context.revision = await snapshot(context, "after-push");
-    if (context.revision.headRefOid !== implementation.published_sha) {
-      throw new Error("PR head does not match the published fix commit; rerun against the latest PR revision");
-    }
+    await confirmPublishedFix(context, revision, implementation.published_sha);
     console.log(`Fixes pushed: ${implementation.published_sha}. A fresh review by the first LLM is required.`);
     return false;
   }
