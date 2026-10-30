@@ -165,7 +165,7 @@ function finish(context: RunContext, status: "approved" | "no_consensus" | "erro
   const summary = { url: context.url, status, round: context.round, revision: context.revision, checkout: context.checkout, reviewers: context.reviewers,
     reviews: context.history, ...(error ? { error: error.message } : {}) };
   writeFileSync(join(context.directory, "summary.json"), JSON.stringify(summary, null, 2), { mode: 0o600 });
-  console.log(`Result: ${status}. Reports: ${context.directory}`);
+  console.log(`Result: ${status}. Reports: ${context.directory}\nPR: ${context.url}`);
 }
 
 async function main(): Promise<void> {
